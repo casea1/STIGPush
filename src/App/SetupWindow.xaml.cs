@@ -233,7 +233,8 @@ namespace StigGpoManager
                     var folder = Path.Combine(Installer.DataDir, "setup-preview");
                     try { var old = Path.Combine(Path.GetTempPath(), "StigGpoManager-setup"); if (Directory.Exists(old)) Directory.Delete(old, true); } catch { }
                     var extracted = PackageScanner.Extract(zip, folder, PackageScanner.ComputeSha256(zip));
-                    try { return PackageScanner.Scan(extracted, lang).Backups.Select(b => b.DisplayName).OrderBy(n => n).ToList(); }
+                    // Local Policy (LGPO) copies are for standalone machines; they are never imported, so leave them out of the preview.
+                    try { return PackageScanner.Scan(extracted, lang).Backups.Where(b => !MappingResolver.IsLocalPolicy(b)).Select(b => b.DisplayName).OrderBy(n => n).ToList(); }
                     finally { try { PackageScanner.DeleteTree(folder); } catch { } }
                 });
                 PackageText.Text = $"Package {Path.GetFileName(zip)}: {_backupNames.Count} GPO backups.";

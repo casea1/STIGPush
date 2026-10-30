@@ -253,6 +253,30 @@ namespace StigGpoManager.Tests
         }
 
         [Fact]
+        public void LocalPolicyCopiesAreNeverImportedAndNeverBeatTheDomainGpo()
+        {
+            var cfg = Cfg();
+            GpoBackupInfo Make(string name, string folder, string time) => new GpoBackupInfo
+            {
+                DisplayName = name, BackupId = "{" + Guid.NewGuid() + "}", BackupFolder = "/pkg/" + folder + "/GPOs/x", BackupRoot = "/pkg/" + folder + "/GPOs",
+                ProductFolder = folder, BackupTime = time, DetectedVersion = StigVersion.Detect(name, folder),
+            };
+            var domain = Make("DoD WinSvr 2025 Member Server STIG Computer v1r4", "DoD WinSvr 2025 MS and DC v1r4", "2026-09-01T00:00:00");
+            // Newer backup time and a path that sorts first: the old duplicate rule would have kept this one.
+            var local = Make("Local Policy - DoD WinSvr 2025 Member Server STIG Computer v1r4", "DoD WinSvr 2025 MS and DC v1r4", "2026-10-01T00:00:00");
+            var inLgpoFolder = Make("DoD WinSvr 2025 Member Server STIG Computer v1r4", "Support Files/LGPO", "2026-10-02T00:00:00");
+            foreach (var order in new[] { new[] { local, domain, inLgpoFolder }, new[] { domain, inLgpoFolder, local } })
+            {
+                var c = MappingResolver.Resolve(order, cfg);
+                Assert.Same(domain, c.Single(x => !x.Skip).Backup);
+                Assert.All(c.Where(x => x.Backup != domain), x => Assert.Contains("Local Policy", x.Problem));
+                Assert.Empty(MappingResolver.ValidateSelection(c));
+            }
+            Assert.False(MappingResolver.IsLocalPolicyName("DoD Windows 11 STIG User v2r11"));
+            Assert.True(MappingResolver.IsLocalPolicyName("Local Policy - DoD Windows 11 STIG User v2r11"));
+        }
+
+        [Fact]
         public void DuplicateBackupsArePickedTheSameWayEveryTime()
         {
             GpoBackupInfo Adobe(string folder, string time) => new GpoBackupInfo

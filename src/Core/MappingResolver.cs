@@ -52,6 +52,13 @@ namespace StigGpoManager.Core
                     c.Skip = true;
                     c.Problem = (c.Problem == null ? "" : c.Problem + " ") + "Version could not be detected; enter it to import.";
                 }
+                if (IsLocalPolicy(b))
+                {
+                    // Same settings as the domain GPO, packaged for standalone machines (applied with LGPO). Never the
+                    // copy to import into AD, and it must not compete with the domain GPO for the same name.
+                    c.Skip = true;
+                    c.Problem = "Local Policy copy (for standalone machines, applied with LGPO); not imported into AD. The domain GPO of the same name is imported instead.";
+                }
                 list.Add(c);
             }
             PickDuplicates(list);
@@ -100,6 +107,16 @@ namespace StigGpoManager.Core
             try { return b.ReportPath != null && System.IO.File.Exists(b.ReportPath) ? PackageScanner.ComputeSha256(b.ReportPath) : null; }
             catch { return null; }
         }
+
+        /// <summary>DISA's "Local Policy - DoD ..." backups (and anything in a Local Policy / LGPO folder) are for standalone machines.</summary>
+        public static bool IsLocalPolicy(GpoBackupInfo b) =>
+            IsLocalPolicyName(b?.DisplayName) || IsLocalPolicyName(b?.ProductFolder) ||
+            (b?.BackupRoot ?? "").Replace('\\', '/').Split('/').Any(IsLocalPolicyName);
+
+        public static bool IsLocalPolicyName(string name) =>
+            !string.IsNullOrEmpty(name) &&
+            (name.IndexOf("Local Policy", StringComparison.OrdinalIgnoreCase) >= 0 || name.IndexOf("LocalPolicy", StringComparison.OrdinalIgnoreCase) >= 0 ||
+             System.Text.RegularExpressions.Regex.IsMatch(name, @"(?<![A-Za-z])LGPO(?![A-Za-z])", System.Text.RegularExpressions.RegexOptions.IgnoreCase));
 
         /// <summary>Mapping whose name template shares the most words with the backup name (needs at least 60% overlap).</summary>
         public static GpoMapping Closest(string backupName, IEnumerable<GpoMapping> mappings)
