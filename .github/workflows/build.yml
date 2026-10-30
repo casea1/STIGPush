@@ -89,6 +89,7 @@ jobs:
           if (Test-Path $exe) { throw 'exe left behind' }
           schtasks /Query /TN 'StigGpoManager Tray' 2>$null | Out-Null; if (-not $LASTEXITCODE) { throw 'tray task left behind' }
           Write-Host 'Install / upgrade / uninstall OK'
+          exit 0
 
       - name: Smoke test (exe starts, PowerShell host assembly binds)
         shell: pwsh
