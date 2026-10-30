@@ -61,9 +61,32 @@ certificate if you have one. `build.ps1` writes the exe's SHA-256 for the transf
    - adds an all-users Start menu shortcut
    - registers the scheduled task **StigGpoManager Tray**, which starts the tray icon at logon for
      Administrators with highest privileges, so there is no UAC prompt
-   - creates `C:\ProgramData\StigGpoManager\` (Administrators and SYSTEM only) and writes a sample `config.json` there
-3. Edit `C:\ProgramData\StigGpoManager\config.json` for this domain (see below), then open the tool
-   from the Start menu or the tray icon. The Start page runs the pre-flight checks.
+   - creates `C:\ProgramData\StigGpoManager\` (Administrators and SYSTEM only) for the config
+3. Open the tool from the Start menu. With no config yet, it offers the **setup wizard** (below),
+   which writes `C:\ProgramData\StigGpoManager\config.json`. The Start page then runs the pre-flight checks.
+
+### Setup wizard
+
+`StigGpoManager.exe /setup`, the *Setup wizard...* button on the Start page, or the first start with no
+config. Nothing about your domain is built into the exe or this repo; everything is detected on the
+machine or entered by you. The wizard **only reads** from AD:
+
+1. **Domain:** detects the computer's domain, PDC emulator, domain controllers, OU tree and whether
+   the Central Store exists.
+2. **Naming and folders:** proposes the exception-GPO prefix from existing GPO names (prefixes whose
+   GPOs sit above DISA GPOs, or mention "exception", rank first), the DISA prefix, a pilot group (any
+   group with "pilot" in its name), and a working folder (`D:\StigGpoManager` if a D: drive exists).
+3. **GPO mappings:** one proposed row per DISA GPO family currently linked. The name pattern comes from
+   the GPO name with its version replaced by `{Version}`, production OUs from its enabled links, and
+   pilot OUs from a `Pilot` child OU. *Match* is suggested from the name: for example `MS` also matches
+   `Member Server`, `Comp` matches `Computer`, and `WinSvr2025` matches `WinSvr 2025`. **Load the DISA
+   package** to see which backup each row matches, which backups nothing matches (add a mapping for
+   them in one click), and pick OUs from the domain's OU list.
+4. **Review and save:** the exact `config.json` plus every validation problem; it saves only when there
+   are no errors. If a config already exists, it is backed up first. Re-running the wizard pre-fills
+   the current config and offers newly detected mappings unticked.
+
+Scripted alternative: `StigGpoManager.exe cli detect [--save]` prints (or saves) the detected config.
 
 **Demo mode:** `StigGpoManager.exe /demo` opens the full GUI against a simulated domain with a sample
 quarterly run already in pilot (package, diff, exception findings, scan results, gate). It makes no
@@ -81,7 +104,7 @@ only hides it. The tray only reads run files; it never changes AD.
 
 ## Configure (`config.json`)
 
-The tool looks for the config at `/config <path>` if given, then
+The setup wizard writes this file; you can also edit it by hand. The tool looks for the config at `/config <path>` if given, then
 `%ProgramData%\StigGpoManager\config.json`, then `config.json` next to the exe. It is validated
 on load, and every problem is listed on the Start page with a clear message: bad JSON with its
 line and column, single backslashes, invalid regexes, OUs outside the domain, a missing
@@ -112,7 +135,7 @@ line and column, single backslashes, invalid regexes, OUs outside the domain, a 
 
 | Setting | Meaning |
 |---|---|
-| `Domain` | DNS name of the domain. Every target DN must be inside it, so a production config cannot be run against the lab and vice versa. |
+| `Domain` | DNS name of the domain (detected). Every target DN must be inside it, so a production config cannot be run against the lab and vice versa. |
 | `TargetDC` | `auto-pdc` resolves the PDC emulator; otherwise give a DC FQDN. Every GroupPolicy/AD cmdlet gets `-Server` set to this DC so all changes land on one DC. |
 | `ExceptionPrefix` | Name prefix of site exception GPOs. These **always win**: they are kept above every DISA GPO on every OU. |
 | `DisaGpoPrefix` | Name prefix of DISA GPOs (used for ordering and cleanup). Must not overlap `ExceptionPrefix`. |

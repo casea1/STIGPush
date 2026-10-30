@@ -86,6 +86,10 @@ namespace StigGpoManager.Core
         void SetPermission(string gpoId, string trustee, string trusteeType, string level);
 
         List<string> GetComputersUnder(string targetDn);
+        /// <summary>DNs of every OU (plus the Domain Controllers OU) in the domain, for setup and pickers.</summary>
+        List<string> GetOrganizationalUnits();
+        /// <summary>Names of security groups whose name contains the text (case-insensitive).</summary>
+        List<string> FindGroups(string nameContains);
         GpUpdateResult InvokeGpUpdate(string computer);
     }
 }

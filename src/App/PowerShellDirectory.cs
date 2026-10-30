@@ -285,6 +285,15 @@ namespace StigGpoManager
             Invoke("Get-ADComputer", P("Filter", "*", "SearchBase", targetDn, "SearchScope", "Subtree", "Server", Server, "Properties", new[] { "DNSHostName" }))
                 .Select(c => Str(c, "DNSHostName") ?? Str(c, "Name")).Where(n => !string.IsNullOrEmpty(n)).ToList();
 
+        public List<string> GetOrganizationalUnits() =>
+            Invoke("Get-ADOrganizationalUnit", P("Filter", "*", "Server", Server))
+                .Select(o => Str(o, "DistinguishedName")).Where(d => !string.IsNullOrEmpty(d))
+                .OrderBy(d => d.Split(',').Length).ThenBy(d => d, StringComparer.OrdinalIgnoreCase).ToList();
+
+        public List<string> FindGroups(string nameContains) =>
+            Invoke("Get-ADGroup", P("LDAPFilter", "(name=*" + EscapeLdap(nameContains) + "*)", "Server", Server))
+                .Select(g => Str(g, "Name")).Where(n => !string.IsNullOrEmpty(n)).OrderBy(n => n).ToList();
+
         public GpUpdateResult InvokeGpUpdate(string computer)
         {
             try

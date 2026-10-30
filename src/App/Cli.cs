@@ -15,6 +15,8 @@ namespace StigGpoManager
         private const string Usage = @"STIG GPO Manager - command line
 Usage: StigGpoManager.exe cli <command> [options] [--config path]
 
+  detect [--save] [--force]            Detect domain settings and print a suggested config.json
+                                       (--save writes it to the config path; --force overwrites)
   preflight [--dcdiag]                 Pre-flight checks
   runs                                 List runs
   load <zip> [--hash <sha256>]         Create a run from a DISA package (no AD changes)
@@ -34,6 +36,31 @@ Usage: StigGpoManager.exe cli <command> [options] [--config path]
 
 Exit codes: 0 success, 1 error, 2 blocked / confirmation required.";
 
+        private static int Detect(string[] rest, string savePath)
+        {
+            var domain = SetupWindow.DetectComputerDomain();
+            if (string.IsNullOrEmpty(domain)) { Console.WriteLine("This computer is not joined to a domain."); return 1; }
+            foreach (var r in HostChecks.Modules().Where(r => r.Status == CheckStatus.Fail)) { Console.WriteLine(r); return 1; }
+            using (var dir = new PowerShellDirectory(new AppConfig { Domain = domain, TargetDC = "auto-pdc" }))
+            {
+                var det = ConfigDetector.Detect(dir, SetupWindow.DefaultWorkingFolder(), System.Globalization.CultureInfo.InstalledUICulture.Name, "DoD ", m => Console.Error.WriteLine(m));
+                foreach (var n in det.Notes) Console.Error.WriteLine("NOTE: " + n);
+                foreach (var c in det.ExceptionPrefixCandidates.Take(5)) Console.Error.WriteLine("Exception prefix candidate: " + c);
+                foreach (var m in det.Mappings) Console.Error.WriteLine($"Mapping: {m.Mapping.NameTemplate}  <- {m.Reason}");
+                foreach (var m in det.UnlinkedFamilies) Console.Error.WriteLine($"Not linked (not included): {m.LatestGpo}");
+                var json = ConfigWriter.ToJson(det.Suggested);
+                Console.WriteLine(json);
+                if (rest.Any(a => a == "--save"))
+                {
+                    if (System.IO.File.Exists(savePath) && !rest.Any(a => a == "--force")) { Console.WriteLine($"{savePath} exists; add --force to overwrite."); return 2; }
+                    System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(savePath));
+                    System.IO.File.WriteAllText(savePath, json);
+                    Console.WriteLine("Saved " + savePath + " - review it (or run StigGpoManager.exe /setup) before use.");
+                }
+                return 0;
+            }
+        }
+
         public static int Run(string[] args, string configPath)
         {
             if (args.Length == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "/?")
@@ -44,6 +71,7 @@ Exit codes: 0 success, 1 error, 2 blocked / confirmation required.";
             var cmd = args[0].ToLowerInvariant();
             var rest = args.Skip(1).ToArray();
             if (cmd == "sample-config") { Console.WriteLine(Installer.SampleConfig()); return 0; }
+            if (cmd == "detect") return Detect(rest, Program.ResolveConfigPath(configPath ?? Program.ArgValue(rest, "--config")));
 
             bool Flag(string f) => rest.Any(a => string.Equals(a, f, StringComparison.OrdinalIgnoreCase));
             string Opt(string f) => Program.ArgValue(rest, f);

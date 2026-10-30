@@ -14,6 +14,7 @@ namespace StigGpoManager
     ///   /install [/quiet]   install to Program Files, Programs and Features, Start menu, tray at logon
     ///   /uninstall [/quiet]
     ///   /config &lt;path&gt;   use a specific config.json
+    ///   /setup           open the setup wizard (detects domain settings, writes config.json)
     ///   /demo            simulated domain with sample data (no AD access) - training / evaluation
     ///   /screenshots &lt;dir&gt;  /demo, save a PNG of every screen to dir, then exit (used by CI for the README)
     ///   cli &lt;command&gt; ...  scriptable command line (see README), run from an elevated console
@@ -97,7 +98,7 @@ namespace StigGpoManager
                     }
                 }
 
-                var app = new App(trayMode, ResolveConfigPath(configPath), demo, screenshots == null ? null : Path.GetFullPath(screenshots));
+                var app = new App(trayMode, ResolveConfigPath(configPath), demo, screenshots == null ? null : Path.GetFullPath(screenshots)) { OpenSetupOnStart = Has("/setup") };
                 return app.Run();
             }
         }
@@ -129,6 +130,7 @@ namespace StigGpoManager
         private string _configPath;
         private Session _demoSession;
         private int _exitCode;
+        public bool OpenSetupOnStart { get; set; }
         private TrayIcon _tray;
         private MainWindow _window;
         private EventWaitHandle _showEvent;
@@ -171,6 +173,7 @@ namespace StigGpoManager
             _showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, Program.ShowEventName);
             _wait = ThreadPool.RegisterWaitForSingleObject(_showEvent, (o, t) => Dispatcher.BeginInvoke(new Action(ShowMain)), null, -1, false);
             if (!_trayMode) ShowMain();
+            if (OpenSetupOnStart && _window != null) _window.Dispatcher.BeginInvoke(new Action(() => _window.OpenSetup()), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
         }
 
         public void ShowMain()

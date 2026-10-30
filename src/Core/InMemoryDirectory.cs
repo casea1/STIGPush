@@ -148,6 +148,11 @@ namespace StigGpoManager.Core
         public List<string> GetComputersUnder(string targetDn) =>
             Computers.Where(kv => kv.Key.EndsWith(AppConfig.NormalizeDn(targetDn), StringComparison.OrdinalIgnoreCase)).SelectMany(kv => kv.Value).ToList();
 
+        public List<string> GetOrganizationalUnits() => Containers.OrderBy(c => c.Length).ThenBy(c => c).ToList();
+
+        public List<string> FindGroups(string nameContains) =>
+            Groups.Where(g => g.IndexOf(nameContains ?? "", StringComparison.OrdinalIgnoreCase) >= 0).OrderBy(g => g).ToList();
+
         public GpUpdateResult InvokeGpUpdate(string computer)
         {
             Calls.Add($"GpUpdate {computer}");

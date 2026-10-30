@@ -15,7 +15,7 @@ namespace StigGpoManager
     ///  - registers in Programs and Features (HKLM Uninstall key)
     ///  - adds an all-users Start menu shortcut
     ///  - registers a logon scheduled task (highest privileges, Administrators group) that starts the tray icon
-    ///  - creates %ProgramData%\StigGpoManager (admins/SYSTEM only) with a sample config.json if none exists
+    ///  - creates %ProgramData%\StigGpoManager (admins/SYSTEM only); the setup wizard writes config.json there
     /// Uninstall removes all of that except ProgramData config and the WorkingFolder (audit evidence).
     /// </summary>
     public static class Installer
@@ -81,12 +81,9 @@ namespace StigGpoManager
             sec.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null), FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
             sec.AddAccessRule(new FileSystemAccessRule(new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null), FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
             Directory.SetAccessControl(DataDir, sec);
-            if (!File.Exists(DefaultConfigPath))
-            {
-                File.WriteAllText(DefaultConfigPath, SampleConfig(), new UTF8Encoding(false));
-                log.AppendLine($"Sample config written to {DefaultConfigPath} - edit it for this domain before use.");
-            }
-            else log.AppendLine($"Existing config kept: {DefaultConfigPath}");
+            log.AppendLine(File.Exists(DefaultConfigPath)
+                ? $"Existing config kept: {DefaultConfigPath}"
+                : "No config yet: the first start opens the setup wizard, which detects the domain settings and writes " + DefaultConfigPath);
         }
 
         public static string SampleConfig()

@@ -197,7 +197,11 @@ namespace StigGpoManager
             {
                 PreflightGrid.ItemsSource = _session.Preflight(false);
                 if (!File.Exists(_session.ConfigPath))
-                    MessageBox.Show(this, $"No config file at {_session.ConfigPath}.\n\nInstall the tool (it writes a sample there) or copy config.sample.json, edit it for this domain, then click Reload config.", Title, MessageBoxButton.OK, MessageBoxImage.Warning);
+                {
+                    if (MessageBox.Show(this, $"No configuration yet ({_session.ConfigPath}).\n\nRun the setup wizard now? It detects the domain, exception-GPO prefix, pilot group and current DISA GPO links, and asks you to confirm each value.",
+                                        Title, MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+                        Dispatcher.BeginInvoke(new Action(() => OpenSetup()));
+                }
                 return;
             }
             MappingColumn.ItemsSource = _session.Config.Mappings;
@@ -233,6 +237,21 @@ namespace StigGpoManager
             if (!RequireEngine()) return;
             bool dcdiag = DcDiagCheck.IsChecked == true;
             RunOp("Pre-flight checks", () => _session.Preflight(dcdiag), r => PreflightGrid.ItemsSource = r);
+        }
+
+        private void Setup_Click(object sender, RoutedEventArgs e) => OpenSetup();
+
+        /// <summary>Opens the setup wizard (pre-filled from the current config, if any) and reloads on save.</summary>
+        public void OpenSetup()
+        {
+            if (IsBusy) return;
+            var path = _session.IsDemo ? Path.Combine(Path.GetDirectoryName(_session.ConfigPath), "config.setup-demo.json") : _session.ConfigPath;
+            var wizard = new SetupWindow(this, path, _session.ConfigValid ? _session.Config : null, _session.IsDemo ? _session.Directory : null, _session.IsDemo);
+            if (wizard.ShowDialog() != true) return;
+            AddLog(LogLevel.Success, "Config saved: " + wizard.SavedPath);
+            if (_session.IsDemo) { MessageBox.Show(this, "Demo: config written to " + wizard.SavedPath + " (not used).", Title); return; }
+            _session.LoadConfig();
+            Connect();
         }
 
         private void ReloadConfig_Click(object sender, RoutedEventArgs e)
@@ -855,6 +874,19 @@ namespace StigGpoManager
                 await Settle();
                 Save(dlg, Path.Combine(folder, "09-confirm-dialog.png"));
                 dlg.Close();
+
+                var wizard = new SetupWindow(this, Path.Combine(Path.GetTempPath(), "StigGpoManager-demo", "config.setup-demo.json"), null, _session.Directory, demo: true)
+                    { WindowStartupLocation = WindowStartupLocation.Manual, Left = Left + 40, Top = Top + 30 };
+                wizard.Show();
+                for (int t = 0; t < 100 && wizard.IsDetecting; t++) await Task.Delay(200);
+                if (_run?.Package?.ZipPath != null) await wizard.LoadPackageFile(_run.Package.ZipPath);
+                for (int page = 0; page < 4; page++)
+                {
+                    wizard.Pages.SelectedIndex = page;
+                    await Settle();
+                    Save(wizard, Path.Combine(folder, $"{14 + page:00}-setup-{page + 1}.png"));
+                }
+                wizard.Close();
 
                 await Shot(folder, "10-rollback", "PanelRollback");
                 FindCleanup_Click(null, null); await WaitIdle();

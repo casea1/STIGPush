@@ -131,6 +131,7 @@
                         <StackPanel Style="{StaticResource Toolbar}">
                             <Button Content="Run pre-flight" Click="Preflight_Click"/>
                             <CheckBox x:Name="DcDiagCheck" Content="Include dcdiag (SYSVOL / replication)" IsChecked="True" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <Button Content="Setup wizard..." Click="Setup_Click"/>
                             <Button Content="Reload config" Click="ReloadConfig_Click"/>
                             <Button Content="Open config" Click="OpenConfig_Click"/>
                             <Button Content="Open working folder" Click="OpenWorking_Click"/>
