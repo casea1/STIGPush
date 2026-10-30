@@ -171,9 +171,17 @@ namespace StigGpoManager
             return info;
         }
 
+        /// <summary>
+        /// True if the OU / container exists. A missing DN is "false", never an exception: AD cmdlets throw a
+        /// terminating ADIdentityNotFoundException for a missing object, which -ErrorAction SilentlyContinue does
+        /// not suppress, so it is caught here. Other errors (DC unreachable, access denied) still throw.
+        /// </summary>
         public bool ContainerExists(string dn)
         {
-            var r = Script("param($dn, $s) [bool](Get-ADObject -Filter * -SearchBase $dn -SearchScope Base -Server $s -ErrorAction SilentlyContinue)",
+            var r = Script(@"param($dn, $s)
+try { [bool](Get-ADObject -Identity $dn -Server $s -ErrorAction Stop) }
+catch [Microsoft.ActiveDirectory.Management.ADIdentityNotFoundException] { $false }
+catch { if ($_.Exception.Message -match 'not found|no such object|cannot find an object') { $false } else { throw } }",
                            P("dn", dn, "s", Server));
             return r.Count > 0 && r[0].BaseObject is bool b && b;
         }
@@ -247,18 +255,29 @@ namespace StigGpoManager
         public void RemoveLink(string gpoId, string targetDn) =>
             Invoke("Remove-GPLink", Gp("Guid", ToGuid(gpoId), "Target", targetDn));
 
-        public GpoInfo ImportNewGpo(string backupRoot, string backupId, string targetName)
+        public GpoInfo ImportNewGpo(string backupRoot, string backupId, string targetName, string migrationTable = null)
         {
             // Rule 1: never import over an existing GPO. -CreateIfNeeded would silently overwrite one.
             if (GetGpoByName(targetName) != null)
                 throw new InvalidOperationException($"A GPO named '{targetName}' already exists; refusing to import over it.");
-            var r = Invoke("Import-GPO", Gp("BackupId", ToGuid(backupId), "Path", backupRoot, "TargetName", targetName, "CreateIfNeeded", new SwitchParameter(true)));
+            var p = Gp("BackupId", ToGuid(backupId), "Path", backupRoot, "TargetName", targetName, "CreateIfNeeded", new SwitchParameter(true));
+            if (!string.IsNullOrEmpty(migrationTable)) p["MigrationTable"] = migrationTable;
+            var r = Invoke("Import-GPO", p);
             return ToGpo(r.First());
         }
 
-        public void SetGpoDescription(string gpoId, string description) =>
-            Script("param($id, $d, $s, $text) $g = Get-GPO -Guid $id -Domain $d -Server $s -ErrorAction Stop; $g.Description = $text",
+        /// <summary>Sets the GPO comment and reads it back from the DC: a write that did not stick is an error, not a silent success.</summary>
+        public void SetGpoDescription(string gpoId, string description)
+        {
+            var r = Script(@"param($id, $d, $s, $text)
+$g = Get-GPO -Guid $id -Domain $d -Server $s -ErrorAction Stop
+$g.Description = $text
+(Get-GPO -Guid $id -Domain $d -Server $s -ErrorAction Stop).Description",
                    P("id", ToGuid(gpoId), "d", _domain, "s", Server, "text", description));
+            var saved = r.Count > 0 ? Convert.ToString(r[r.Count - 1].BaseObject) : null;
+            if (!string.Equals((saved ?? "").Trim(), (description ?? "").Trim(), StringComparison.Ordinal))
+                throw new InvalidOperationException($"the comment did not save on {Server} (read back: '{saved}').");
+        }
 
         public void BackupAllGpos(string folder) =>
             Invoke("Backup-GPO", Gp("All", new SwitchParameter(true), "Path", folder, "Comment", "StigGpoManager pre-import backup"));
@@ -294,17 +313,71 @@ namespace StigGpoManager
             Invoke("Get-ADGroup", P("LDAPFilter", "(name=*" + EscapeLdap(nameContains) + "*)", "Server", Server))
                 .Select(g => Str(g, "Name")).Where(n => !string.IsNullOrEmpty(n)).OrderBy(n => n).ToList();
 
+        /// <summary>Seconds to wait for one computer before giving up on it.</summary>
+        public int GpUpdateTimeoutSeconds { get; set; } = 60;
+
+        /// <summary>
+        /// Invoke-GPUpdate schedules gpupdate on the computer over RPC (Task Scheduler). Against a computer that is
+        /// off or firewalled it can hang for minutes, so: first a quick TCP check of the RPC endpoint mapper (135,
+        /// 3 s), then the cmdlet in its own runspace with a time limit. Runs in parallel across computers.
+        /// </summary>
         public GpUpdateResult InvokeGpUpdate(string computer)
         {
+            if (!PortOpen(computer, 135, 3000))
+                return new GpUpdateResult { Computer = computer, Success = false, Message = "Not reachable (RPC port 135 did not answer within 3 s); skipped. Check it is on and the firewall allows remote scheduled tasks." };
             try
             {
-                Invoke("Invoke-GPUpdate", P("Computer", computer, "Force", new SwitchParameter(true), "RandomDelayInMinutes", 0));
+                using (var rs = RunspaceFactory.CreateRunspace(GpUpdateSessionState()))
+                {
+                    rs.Open();
+                    using (var ps = PowerShell.Create())
+                    {
+                        ps.Runspace = rs;
+                        ps.AddCommand("Invoke-GPUpdate").AddParameter("Computer", computer).AddParameter("Force").AddParameter("RandomDelayInMinutes", 0).AddParameter("ErrorAction", "Stop");
+                        var async = ps.BeginInvoke();
+                        if (!async.AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(GpUpdateTimeoutSeconds)))
+                        {
+                            try { ps.BeginStop(null, null); } catch { }
+                            return new GpUpdateResult { Computer = computer, Success = false, Message = $"No answer within {GpUpdateTimeoutSeconds} s; skipped (it may still refresh at its next policy cycle)." };
+                        }
+                        ps.EndInvoke(async);
+                        if (ps.HadErrors && ps.Streams.Error.Count > 0)
+                            return new GpUpdateResult { Computer = computer, Success = false, Message = string.Join("; ", ps.Streams.Error.Select(e => e.ToString())) };
+                    }
+                }
                 return new GpUpdateResult { Computer = computer, Success = true, Message = "Refresh scheduled" };
             }
             catch (Exception ex)
             {
-                return new GpUpdateResult { Computer = computer, Success = false, Message = ex.Message };
+                return new GpUpdateResult { Computer = computer, Success = false, Message = (ex.InnerException ?? ex).Message };
             }
+        }
+
+        private InitialSessionState _gpUpdateState;
+        private InitialSessionState GpUpdateSessionState()
+        {
+            lock (_lock)
+            {
+                if (_gpUpdateState == null)
+                {
+                    _gpUpdateState = InitialSessionState.CreateDefault2();
+                    _gpUpdateState.ImportPSModule(new[] { "GroupPolicy" });
+                }
+                return _gpUpdateState;
+            }
+        }
+
+        private static bool PortOpen(string host, int port, int timeoutMs)
+        {
+            try
+            {
+                using (var c = new System.Net.Sockets.TcpClient())
+                {
+                    var t = c.ConnectAsync(host, port);
+                    return t.Wait(timeoutMs) && c.Connected;
+                }
+            }
+            catch { return false; }
         }
 
         // ------------------------------------------------------------------ host checks

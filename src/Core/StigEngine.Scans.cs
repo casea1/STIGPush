@@ -44,6 +44,11 @@ namespace StigGpoManager.Core
             Save(run);
             Audit.Write(run.RunId, "ImportScanResult", rec.OriginalFileName, "Success", null, $"stage={stage}; format={rec.Format}; hosts={string.Join(",", rec.Hosts)}; open={rec.OpenCount}/{rec.TotalCount}; sha256={hash}");
             Ok($"Imported {rec.Format} {rec.OriginalFileName} ({stage}): {string.Join(", ", rec.Hosts)}; {rec.OpenCount} open of {rec.TotalCount}.");
+            foreach (var h in parsed.Findings.GroupBy(f => f.Host, StringComparer.OrdinalIgnoreCase).Where(g => !g.Any(f => f.Evaluated)))
+                Warn($"{rec.OriginalFileName}: no rule was evaluated on {h.Key} ({h.Count()} results, all error / not checked). The scan did not run properly; this blocks Promote.");
+            var noVid = parsed.Findings.Count(f => !f.HasVulnId);
+            if (noVid > 0)
+                Warn($"{rec.OriginalFileName}: {noVid} result(s) have no V-ID (only a rule ID such as {parsed.Findings.First(f => !f.HasVulnId).VulnId}). Register entries for them must use the SV- rule ID.");
             return rec;
         }
 
@@ -106,7 +111,7 @@ namespace StigGpoManager.Core
             var r = _engine.EvaluateGate(run);
             if (r.Passed) return CheckResult.Pass(Name, r.Summary);
             var sb = new StringBuilder(r.Summary);
-            foreach (var f in r.Blocking.Take(15)) sb.Append($" | {f.Host} {f.VulnId}");
+            foreach (var f in r.Blocking.Take(15)) sb.Append($" | {f.Host} {f.DisplayId}{(f.Status == ScanStatus.Error ? " (error)" : "")}");
             if (r.Blocking.Count > 15) sb.Append($" | ... and {r.Blocking.Count - 15} more");
             sb.Append(". Fix and re-import results, or add each to the exceptions register with a justification.");
             return CheckResult.Fail(Name, sb.ToString());

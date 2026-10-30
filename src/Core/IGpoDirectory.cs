@@ -74,7 +74,8 @@ namespace StigGpoManager.Core
         void RemoveLink(string gpoId, string targetDn);
 
         /// <summary>Creates a NEW GPO named <paramref name="targetName"/> from a backup. Must fail if the name exists.</summary>
-        GpoInfo ImportNewGpo(string backupRoot, string backupId, string targetName);
+        /// <param name="migrationTable">Optional .migtable path passed to Import-GPO -MigrationTable.</param>
+        GpoInfo ImportNewGpo(string backupRoot, string backupId, string targetName, string migrationTable = null);
         void SetGpoDescription(string gpoId, string description);
         /// <summary>Backup-GPO -All; returns the backup folder.</summary>
         void BackupAllGpos(string folder);

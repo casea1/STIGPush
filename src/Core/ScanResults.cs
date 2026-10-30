@@ -7,7 +7,8 @@ using System.Xml;
 
 namespace StigGpoManager.Core
 {
-    public enum ScanStatus { NotAFinding, NotApplicable, NotReviewed, Open }
+    /// <summary>Ordered from best to worst (Consolidate keeps the worst). Error = the scanner could not evaluate the rule.</summary>
+    public enum ScanStatus { NotAFinding, NotApplicable, NotReviewed, Error, Open }
 
     public sealed class ScanFinding
     {
@@ -18,6 +19,11 @@ namespace StigGpoManager.Core
         public string Title { get; set; }
         public ScanStatus Status { get; set; }
         public string SourceFile { get; set; }
+        /// <summary>False when the result carried only a rule ID (SV-...): register entries must then use that rule ID.</summary>
+        public bool HasVulnId => VulnId != null && VulnId.StartsWith("V-", StringComparison.OrdinalIgnoreCase);
+        /// <summary>The scanner reached a verdict on this rule (pass, fail or not applicable).</summary>
+        public bool Evaluated => Status == ScanStatus.NotAFinding || Status == ScanStatus.NotApplicable || Status == ScanStatus.Open;
+        public string DisplayId => HasVulnId || string.IsNullOrEmpty(RuleId) ? VulnId : VulnId + " (rule " + RuleId + ")";
     }
 
     public sealed class ScanFileResult
@@ -68,7 +74,8 @@ namespace StigGpoManager.Core
                 case "pass": case "fixed": return ScanStatus.NotAFinding;
                 case "fail": return ScanStatus.Open;
                 case "notapplicable": return ScanStatus.NotApplicable;
-                default: return ScanStatus.NotReviewed; // notchecked, notselected, informational, error, unknown
+                case "error": case "unknown": return ScanStatus.Error;
+                default: return ScanStatus.NotReviewed; // notchecked, notselected, informational
             }
         }
 
@@ -140,8 +147,10 @@ namespace StigGpoManager.Core
             {
                 var group = rule.ParentNode as XmlElement;
                 var m = VidRegex.Match(group?.GetAttribute("id") ?? "");
+                string vid = m.Success ? m.Value.ToUpperInvariant() : null;
+                if (vid == null) vid = VidFromIdents(rule);
                 var title = rule.SelectSingleNode("*[local-name()='title']")?.InnerText?.Trim();
-                ruleMap[rule.GetAttribute("id")] = (m.Success ? m.Value.ToUpperInvariant() : null, title);
+                ruleMap[rule.GetAttribute("id")] = (vid, title);
             }
             foreach (XmlElement tr in doc.SelectNodes("//*[local-name()='TestResult']"))
             {
@@ -151,17 +160,12 @@ namespace StigGpoManager.Core
                 {
                     var idref = rr.GetAttribute("idref");
                     ruleMap.TryGetValue(idref, out var info);
-                    var vid = info.vid;
-                    if (vid == null)
-                        foreach (XmlNode ident in rr.SelectNodes("*[local-name()='ident']"))
-                        {
-                            var t = ident.InnerText.Trim();
-                            if (Regex.IsMatch(t, @"^V-\d+$", RegexOptions.IgnoreCase)) { vid = t.ToUpperInvariant(); break; }
-                        }
+                    var vid = info.vid ?? VidFromIdents(rr);
                     if (vid == null)
                     {
-                        var sv = Regex.Match(idref, @"SV-\d+", RegexOptions.IgnoreCase);
-                        vid = sv.Success ? sv.Value.ToUpperInvariant() : idref;
+                        // Results without the benchmark: only the rule ID is known. Keep it (SV-123456) so the
+                        // finding is still counted; the gate says it has no V-ID and register entries can use it.
+                        vid = RuleStem(idref) ?? idref;
                     }
                     r.Findings.Add(new ScanFinding
                     {
@@ -172,6 +176,23 @@ namespace StigGpoManager.Core
                 }
             }
             return r;
+        }
+
+        private static string VidFromIdents(XmlNode node)
+        {
+            foreach (XmlNode ident in node.SelectNodes("*[local-name()='ident']"))
+            {
+                var t = (ident.InnerText ?? "").Trim();
+                if (Regex.IsMatch(t, @"^V-\d+$", RegexOptions.IgnoreCase)) return t.ToUpperInvariant();
+            }
+            return null;
+        }
+
+        /// <summary>"xccdf_mil.disa.stig_rule_SV-253256r828891_rule" -&gt; "SV-253256" (the rule, without its revision).</summary>
+        public static string RuleStem(string ruleId)
+        {
+            var m = Regex.Match(ruleId ?? "", @"(?<![A-Za-z0-9])SV-(\d+)", RegexOptions.IgnoreCase);
+            return m.Success ? "SV-" + m.Groups[1].Value : null;
         }
 
         /// <summary>Per host and V-ID, the worst status across all files (Open beats NotReviewed beats the rest).</summary>
@@ -200,9 +221,21 @@ namespace StigGpoManager.Core
         public DateTime DateAdded { get; set; }
         public string AddedBy { get; set; }
 
+        /// <summary>
+        /// Same V-ID (any case), or - for an entry written as a rule ID (SV-123456 or SV-123456r1_rule) - the same
+        /// rule regardless of its revision, which is how results that carry no V-ID can still be accepted.
+        /// </summary>
         public bool Matches(ScanFinding f)
         {
-            if (!string.Equals((VulnId ?? "").Trim(), f.VulnId, StringComparison.OrdinalIgnoreCase)) return false;
+            var id = (VulnId ?? "").Trim();
+            bool same = string.Equals(id, (f.VulnId ?? "").Trim(), StringComparison.OrdinalIgnoreCase);
+            if (!same)
+            {
+                var stem = ScanParser.RuleStem(id);
+                same = stem != null && (string.Equals(stem, ScanParser.RuleStem(f.RuleId), StringComparison.OrdinalIgnoreCase)
+                                        || string.Equals(stem, ScanParser.RuleStem(f.VulnId), StringComparison.OrdinalIgnoreCase));
+            }
+            if (!same) return false;
             if (string.IsNullOrWhiteSpace(StigName)) return true;
             return (f.StigName ?? "").IndexOf(StigName.Trim(), StringComparison.OrdinalIgnoreCase) >= 0;
         }
@@ -244,7 +277,7 @@ namespace StigGpoManager.Core
             {
                 var e = Entries[i];
                 if (string.IsNullOrWhiteSpace(e.VulnId) || !Regex.IsMatch(e.VulnId.Trim(), @"^(V|SV)-\d+", RegexOptions.IgnoreCase))
-                    problems.Add($"Entry {i + 1}: V-ID '{e.VulnId}' must look like V-123456.");
+                    problems.Add($"Entry {i + 1}: V-ID '{e.VulnId}' must look like V-123456 (or a rule ID like SV-123456).");
                 if (string.IsNullOrWhiteSpace(e.Justification))
                     problems.Add($"Entry {i + 1} ({e.VulnId}): justification is required.");
             }
@@ -276,6 +309,10 @@ namespace StigGpoManager.Core
         public List<ScanFinding> Blocking { get; } = new List<ScanFinding>();
         public List<ExpectedFinding> Expected { get; } = new List<ExpectedFinding>();
         public List<ScanFinding> NotReviewed { get; } = new List<ScanFinding>();
+        /// <summary>Hosts where the scanner reached no verdict at all (every rule error / not checked): the scan did not really run.</summary>
+        public List<string> UnevaluatedHosts { get; } = new List<string>();
+        /// <summary>Results that carried only a rule ID (no V-ID).</summary>
+        public int WithoutVulnId { get; set; }
         public List<StatusChange> StatusChanges { get; } = new List<StatusChange>();
         public List<string> Hosts { get; } = new List<string>();
         public string Summary { get; set; }
@@ -292,9 +329,12 @@ namespace StigGpoManager.Core
             var result = new ScanGateResult();
             var pilotMap = ScanParser.Consolidate(pilot);
             result.Hosts.AddRange(pilotMap.Values.Select(f => f.Host).Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(h => h));
+            foreach (var host in pilotMap.Values.GroupBy(f => f.Host, StringComparer.OrdinalIgnoreCase))
+                if (!host.Any(f => f.Evaluated)) result.UnevaluatedHosts.Add(host.Key);
+            result.WithoutVulnId = pilotMap.Values.Count(f => !f.HasVulnId);
             foreach (var f in pilotMap.Values.OrderBy(f => f.Host).ThenBy(f => f.VulnId))
             {
-                if (f.Status == ScanStatus.Open)
+                if (f.Status == ScanStatus.Open || f.Status == ScanStatus.Error)
                 {
                     var entry = register.Find(f);
                     if (entry != null) result.Expected.Add(new ExpectedFinding { Finding = f, Entry = entry });
@@ -310,10 +350,20 @@ namespace StigGpoManager.Core
                         result.StatusChanges.Add(new StatusChange { Host = kv.Value.Host, VulnId = kv.Value.VulnId, Before = b.Status, After = kv.Value.Status });
             }
             bool noResults = pilotMap.Count == 0;
-            result.Passed = result.Blocking.Count == 0 && !(requireResults && noResults);
-            result.Summary = noResults
-                ? "No pilot scan results imported."
-                : $"{result.Hosts.Count} host(s); {result.Blocking.Count} blocking open finding(s), {result.Expected.Count} expected (in register), {result.NotReviewed.Count} not reviewed.";
+            result.Passed = result.Blocking.Count == 0 && result.UnevaluatedHosts.Count == 0 && !(requireResults && noResults);
+            if (noResults) result.Summary = "No pilot scan results imported.";
+            else
+            {
+                int errors = result.Blocking.Count(f => f.Status == ScanStatus.Error);
+                var sb = new System.Text.StringBuilder($"{result.Hosts.Count} host(s); {result.Blocking.Count - errors} blocking open finding(s)");
+                if (errors > 0) sb.Append($", {errors} rule(s) the scanner could not evaluate (error)");
+                sb.Append($", {result.Expected.Count} expected (in register), {result.NotReviewed.Count} not reviewed.");
+                if (result.UnevaluatedHosts.Count > 0)
+                    sb.Append($" No rule was evaluated on {string.Join(", ", result.UnevaluatedHosts)} (every result is error / not checked): the scan did not run properly there; re-scan before promoting.");
+                if (result.WithoutVulnId > 0)
+                    sb.Append($" {result.WithoutVulnId} result(s) carry only a rule ID (no V-ID; the results file has no benchmark): an exception for one of them must be entered with its SV- rule ID.");
+                result.Summary = sb.ToString();
+            }
             return result;
         }
     }

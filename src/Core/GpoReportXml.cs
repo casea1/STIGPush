@@ -15,6 +15,17 @@ namespace StigGpoManager.Core
             string.Concat(members.Select(m => $"<q1:Member><Name xmlns=\"http://www.microsoft.com/GroupPolicy/Types\">{m}</Name></q1:Member>")) +
             "</q1:UserRightsAssignment>";
 
+        /// <summary>User right with members as GPMC writes them: SID and name (name may be empty for an unresolved SID).</summary>
+        public static string UserRightSids(string right, params (string name, string sid)[] members) =>
+            $"<q1:UserRightsAssignment><q1:Name>{right}</q1:Name>" +
+            string.Concat(members.Select(m => "<q1:Member>" + (m.sid == null ? "" : $"<SID xmlns=\"http://www.microsoft.com/GroupPolicy/Types\">{m.sid}</SID>") +
+                                              (m.name == null ? "" : $"<Name xmlns=\"http://www.microsoft.com/GroupPolicy/Types\">{m.name}</Name>") + "</q1:Member>")) +
+            "</q1:UserRightsAssignment>";
+
+        /// <summary>A registry-based policy setting (e.g. App Privacy LetAppsActivateWithVoice) as an Administrative Templates item.</summary>
+        public static string RegistryValue(string keyPath, string valueName, int value) =>
+            $"<q2:RegistrySetting><q2:KeyPath>{keyPath}</q2:KeyPath><q2:Value><q2:Name>{valueName}</q2:Name><q2:Number>{value}</q2:Number></q2:Value></q2:RegistrySetting>";
+
         public static string Account(string name, int value) =>
             $"<q1:Account><q1:Name>{name}</q1:Name><q1:SettingNumber>{value}</q1:SettingNumber><q1:Type>Password</q1:Type></q1:Account>";
 

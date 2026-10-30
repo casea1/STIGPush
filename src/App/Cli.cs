@@ -198,7 +198,7 @@ Exit codes: 0 success, 1 error, 2 blocked / confirmation required.";
                         {
                             var g = e.EvaluateGate(LoadRun());
                             Console.WriteLine((g.Passed ? "PASS: " : "FAIL: ") + g.Summary);
-                            foreach (var f in g.Blocking) Console.WriteLine($"  BLOCKING {f.Host} {f.VulnId} {f.Title}");
+                            foreach (var f in g.Blocking) Console.WriteLine($"  BLOCKING {f.Host} {f.DisplayId}{(f.Status == ScanStatus.Error ? " (scanner error)" : "")} {f.Title}");
                             return g.Passed ? 0 : 2;
                         }
                         case "promote":

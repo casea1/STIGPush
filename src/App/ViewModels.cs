@@ -164,10 +164,10 @@ namespace StigGpoManager
     {
         public ScanFinding Finding { get; set; }
         public ExceptionEntry Entry { get; set; }
-        public string Result => Entry == null ? "BLOCKING" : "Expected";
+        public string Result => Entry != null ? "Expected" : Finding.Status == ScanStatus.Error ? "BLOCKING (error)" : "BLOCKING";
         public int Severity => Entry == null ? 2 : 0;
         public string Host => Finding.Host;
-        public string VulnId => Finding.VulnId;
+        public string VulnId => Finding.DisplayId;
         public string Stig => Finding.StigName;
         public string Title => Finding.Title;
         public string Exception => Entry == null ? "" : $"{Entry.ExceptionGpo} {Entry.PoamReference}".Trim();

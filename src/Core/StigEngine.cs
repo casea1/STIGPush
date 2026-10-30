@@ -114,6 +114,11 @@ namespace StigGpoManager.Core
                 ? CheckResult.Pass("Target OUs exist", $"{Config.Mappings.SelectMany(m => m.PilotTargets.Concat(m.ProdTargets)).Distinct(StringComparer.OrdinalIgnoreCase).Count()} OUs")
                 : CheckResult.Fail("Target OUs exist", "Not found: " + string.Join("; ", missing)));
 
+            if (!Config.MigrationAuto && !Config.MigrationNone)
+                results.Add(File.Exists(Config.MigrationTable.Trim())
+                    ? CheckResult.Pass("Migration table", Config.MigrationTable)
+                    : CheckResult.Fail("Migration table", $"{Config.MigrationTable} not found. Fix MigrationTable in config.json or set it to \"auto\"."));
+
             if (Config.Mappings.Any(m => m.EffectivePilotMode(Config) == PilotMode.Group))
             {
                 try
@@ -265,7 +270,47 @@ namespace StigGpoManager.Core
                 plan.Add("Create GPO", name, $"Import-GPO -CreateIfNeeded from backup {c.Backup.BackupId} ('{c.Backup.DisplayName}', {c.Backup.Scope})");
                 if (Config.WriteGpoComment) plan.Add("Comment", name, CommentFor(run, c));
             }
+            PlanMigration(plan, selected, run: run);
             return plan;
+        }
+
+        /// <summary>What the import does with DISA's domain groups (see MigrationTables). Null = no table.</summary>
+        private string PlanMigration(OperationPlan plan, List<ImportCandidate> selected, bool write = false, RunState run = null)
+        {
+            if (Config.MigrationNone) 
+            {
+                var foreignNone = MigrationTables.Foreign(selected.Select(c => c.Backup), Domain);
+                if (foreignNone.Count > 0)
+                    plan?.Warnings.Add($"MigrationTable is \"none\": {foreignNone.Count} group(s) from DISA's domain are imported unchanged and will not resolve here: " +
+                                       string.Join("; ", foreignNone.Select(p => p.Display)) + ". Settings naming them (e.g. deny-logon rights for Domain Admins) will not cover this domain's groups.");
+                return null;
+            }
+            if (!Config.MigrationAuto)
+            {
+                var path = Config.MigrationTable.Trim();
+                if (!File.Exists(path)) { plan?.Blockers.Add($"MigrationTable file not found: {path}. Fix the path in config.json, or set it to \"auto\"."); return null; }
+                plan?.Add("Migration table", path, "Import-GPO -MigrationTable (your table from config.json)");
+                return path;
+            }
+            var foreign = MigrationTables.Foreign(selected.Select(c => c.Backup), Domain);
+            if (foreign.Count == 0) return null;
+            var mig = MigrationTables.Plan(foreign, Domain, n => Directory.GroupExists(n));
+            string target = run == null ? Config.RunsFolder + Path.DirectorySeparatorChar + "(run)" + Path.DirectorySeparatorChar + "migration-table.migtable"
+                                        : Path.Combine(Store.EvidenceFolder(run.RunId), "migration-table.migtable");
+            if (mig.Mapped.Count > 0)
+                plan?.Add("Migration table", target, "Map DISA's domain groups to this domain on import:\n" +
+                          string.Join("\n", mig.Mapped.Select(m => $"  {m.Source.Display} -> {m.Destination}")));
+            if (mig.Unmapped.Count > 0)
+                plan?.Warnings.Add($"{mig.Unmapped.Count} principal(s) from DISA's domain have no match here and are imported unchanged (their SID will not resolve): " +
+                                   string.Join("; ", mig.Unmapped.Select(p => p.Display)) + ". Check the settings that use them after import, or supply your own table (MigrationTable in config.json).");
+            if (mig.Mapped.Count == 0) return null;
+            if (write)
+            {
+                MigrationTables.Write(target, mig);
+                Audit.Write(run?.RunId, "WriteMigrationTable", target, "Success", null, string.Join("; ", mig.Mapped.Select(m => m.Source.Source + " -> " + m.Destination)));
+                Info($"Migration table written: {target} ({mig.Mapped.Count} mapping(s)).");
+            }
+            return target;
         }
 
         private string CommentFor(RunState run, ImportCandidate c) =>
@@ -285,6 +330,7 @@ namespace StigGpoManager.Core
             run.Backups.Add(backupDir);
             Save(run);
             Ok("Pre-flight GPO backup complete.");
+            var migrationTable = PlanMigration(null, selected, write: true, run: run);
 
             foreach (var c in selected)
             {
@@ -320,8 +366,8 @@ namespace StigGpoManager.Core
                 GpoInfo gpo;
                 try
                 {
-                    gpo = Do(run, "ImportGpo", name, () => Directory.ImportNewGpo(c.Backup.BackupRoot, c.Backup.BackupId, name),
-                             $"backupId={c.Backup.BackupId}; source='{c.Backup.DisplayName}'");
+                    gpo = Do(run, "ImportGpo", name, () => Directory.ImportNewGpo(c.Backup.BackupRoot, c.Backup.BackupId, name, migrationTable),
+                             $"backupId={c.Backup.BackupId}; source='{c.Backup.DisplayName}'" + (migrationTable == null ? "" : $"; migrationTable={migrationTable}"));
                 }
                 catch (Exception ex)
                 {

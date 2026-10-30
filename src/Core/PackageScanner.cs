@@ -28,6 +28,8 @@ namespace StigGpoManager.Core
         public bool HasUserSettings { get; set; }
         public string ReportPath { get; set; }
         public StigVersion DetectedVersion { get; set; }
+        /// <summary>Domain accounts / groups (from DISA's build domain) the backup's settings refer to, from Backup.xml.</summary>
+        public List<ForeignPrincipal> ForeignPrincipals { get; set; } = new List<ForeignPrincipal>();
 
         public string Scope =>
             HasComputerSettings && HasUserSettings ? "Computer+User" :
@@ -208,6 +210,7 @@ namespace StigGpoManager.Core
                 b.HasUserSettings = hasUser;
             }
             b.DetectedVersion = StigVersion.Detect(b.DisplayName, b.ProductFolder);
+            b.ForeignPrincipals = MigrationTables.ReadBackupXml(folder);
             return b;
         }
 

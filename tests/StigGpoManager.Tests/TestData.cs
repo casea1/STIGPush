@@ -70,23 +70,29 @@ namespace StigGpoManager.Tests
             $"<BackupTime><![CDATA[2026-09-15T10:00:00]]></BackupTime><ID><![CDATA[{backupId}]]></ID><Comment><![CDATA[]]></Comment>" +
             $"<GPODisplayName><![CDATA[{displayName}]]></GPODisplayName></BackupInst>";
 
-        public static void AddBackup(string gposFolder, string displayName, string reportXml, out string backupId)
+        /// <summary>Backup.xml listing domain principals the way GPMC records them for migration.</summary>
+        public static string BackupXml(params (string sam, string sid, string type)[] principals) =>
+            "<?xml version=\"1.0\" encoding=\"utf-8\"?><GroupPolicyBackupScheme bkp:version=\"2.0\" bkp:type=\"GroupPolicyBackupTemplate\" xmlns:bkp=\"http://www.microsoft.com/GroupPolicy/GPOOperations\" xmlns=\"http://www.microsoft.com/GroupPolicy/GPOOperations\"><GroupPolicyObject>" +
+            string.Concat(principals.Select(p => $"<SecurityGroup><Sid><![CDATA[{p.sid}]]></Sid><SamAccountName><![CDATA[{p.sam}]]></SamAccountName><Type><![CDATA[{p.type}]]></Type><NetBIOSDomainName><![CDATA[DISATEST]]></NetBIOSDomainName><DnsDomainName><![CDATA[disa.test]]></DnsDomainName><UPN><![CDATA[{p.sam}@disa.test]]></UPN></SecurityGroup>")) +
+            "</GroupPolicyObject></GroupPolicyBackupScheme>";
+
+        public static void AddBackup(string gposFolder, string displayName, string reportXml, out string backupId, string backupXml = null)
         {
             backupId = "{" + Guid.NewGuid().ToString().ToUpperInvariant() + "}";
             var dir = Path.Combine(gposFolder, backupId);
             Directory.CreateDirectory(dir);
             File.WriteAllText(Path.Combine(dir, "bkupInfo.xml"), BkupInfo(backupId, displayName));
             File.WriteAllText(Path.Combine(dir, "gpreport.xml"), reportXml);
-            File.WriteAllText(Path.Combine(dir, "Backup.xml"), "<GroupPolicyBackupScheme/>");
+            File.WriteAllText(Path.Combine(dir, "Backup.xml"), backupXml ?? "<GroupPolicyBackupScheme/>");
         }
 
         /// <summary>DISA-like package: product folders with GPOs\{GUID} backups and ADMX templates (with a duplicate).</summary>
-        public static string BuildPackage(TempDir tmp, string memberServerReport, string dcReport = null)
+        public static string BuildPackage(TempDir tmp, string memberServerReport, string dcReport = null, string memberServerBackupXml = null)
         {
             var src = tmp.Sub("pkgsrc", "October 2026 DISA STIG GPO Package");
             var ms = Path.Combine(src, "DoD WinSvr 2025 MS and DC v1r4", "GPOs");
             Directory.CreateDirectory(ms);
-            AddBackup(ms, "DoD WinSvr 2025 Member Server STIG Computer v1r4", memberServerReport, out _);
+            AddBackup(ms, "DoD WinSvr 2025 Member Server STIG Computer v1r4", memberServerReport, out _, memberServerBackupXml);
             AddBackup(ms, "DoD WinSvr 2025 Domain Controller STIG Computer v1r4", dcReport ?? Report("dc"), out _);
             var other = Path.Combine(src, "DoD Google Chrome v2r11", "GPOs");
             Directory.CreateDirectory(other);

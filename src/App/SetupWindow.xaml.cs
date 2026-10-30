@@ -299,6 +299,7 @@ namespace StigGpoManager
                 SoakDays = soak,
                 RequireScanGate = GateCheck.IsChecked == true,
                 WriteGpoComment = CommentCheck.IsChecked == true,
+                MigrationTable = _existing?.MigrationTable ?? "auto",
                 Mappings = _rows.Where(r => r.Include).Select(r => r.ToMapping()).ToList(),
             };
         }

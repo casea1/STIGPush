@@ -213,19 +213,64 @@ namespace StigGpoManager.Core
 
         private struct Principal { public string Id; public string Name; }
 
+        /// <summary>
+        /// Well-known principals by name (as GPMC prints them, with or without BUILTIN\ / NT AUTHORITY\), so a
+        /// member written as a name in one package and as a SID in the next compares as the same member.
+        /// </summary>
+        private static readonly Dictionary<string, string> WellKnown = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "Everyone", "S-1-1-0" }, { "Local", "S-1-2-0" }, { "Creator Owner", "S-1-3-0" },
+            { "Dialup", "S-1-5-1" }, { "Network", "S-1-5-2" }, { "Batch", "S-1-5-3" }, { "Interactive", "S-1-5-4" },
+            { "Service", "S-1-5-6" }, { "Anonymous Logon", "S-1-5-7" }, { "Enterprise Domain Controllers", "S-1-5-9" },
+            { "Self", "S-1-5-10" }, { "Authenticated Users", "S-1-5-11" }, { "Restricted", "S-1-5-12" },
+            { "Terminal Server User", "S-1-5-13" }, { "Remote Interactive Logon", "S-1-5-14" }, { "This Organization", "S-1-5-15" },
+            { "System", "S-1-5-18" }, { "Local System", "S-1-5-18" }, { "Local Service", "S-1-5-19" }, { "Network Service", "S-1-5-20" },
+            { "Local account", "S-1-5-113" }, { "Local account and member of Administrators group", "S-1-5-114" },
+            { "Administrators", "S-1-5-32-544" }, { "Users", "S-1-5-32-545" }, { "Guests", "S-1-5-32-546" },
+            { "Power Users", "S-1-5-32-547" }, { "Account Operators", "S-1-5-32-548" }, { "Server Operators", "S-1-5-32-549" },
+            { "Print Operators", "S-1-5-32-550" }, { "Backup Operators", "S-1-5-32-551" }, { "Replicator", "S-1-5-32-552" },
+            { "Pre-Windows 2000 Compatible Access", "S-1-5-32-554" }, { "Remote Desktop Users", "S-1-5-32-555" },
+            { "Network Configuration Operators", "S-1-5-32-556" }, { "Performance Monitor Users", "S-1-5-32-558" },
+            { "Performance Log Users", "S-1-5-32-559" }, { "Distributed COM Users", "S-1-5-32-562" }, { "IIS_IUSRS", "S-1-5-32-568" },
+            { "Cryptographic Operators", "S-1-5-32-569" }, { "Event Log Readers", "S-1-5-32-573" }, { "Hyper-V Administrators", "S-1-5-32-578" },
+            { "Remote Management Users", "S-1-5-32-580" },
+            { "Window Manager Group", "S-1-5-90-0" }, { "Virtual Machines", "S-1-5-83-0" }, { "All Services", "S-1-5-80-0" },
+            { "ALL APPLICATION PACKAGES", "S-1-15-2-1" }, { "ALL RESTRICTED APPLICATION PACKAGES", "S-1-15-2-2" },
+        };
+
+        private static string NormalizeName(string name)
+        {
+            var n = (name ?? "").Trim().TrimStart('*');
+            if (n.StartsWith("S-1-", StringComparison.OrdinalIgnoreCase)) return n.ToUpperInvariant();
+            var bare = n;
+            var slash = n.LastIndexOf('\\');
+            if (slash >= 0)
+            {
+                var domain = n.Substring(0, slash);
+                // Only built-in qualifiers are dropped; LAB\svc-scan stays a domain account.
+                if (domain.Equals("BUILTIN", StringComparison.OrdinalIgnoreCase) || domain.Equals("NT AUTHORITY", StringComparison.OrdinalIgnoreCase)
+                    || domain.Equals("Window Manager", StringComparison.OrdinalIgnoreCase) || domain.Equals("NT VIRTUAL MACHINE", StringComparison.OrdinalIgnoreCase)
+                    || domain.Equals("APPLICATION PACKAGE AUTHORITY", StringComparison.OrdinalIgnoreCase) || domain.Equals("NT SERVICE", StringComparison.OrdinalIgnoreCase))
+                    bare = n.Substring(slash + 1);
+            }
+            if (slash < 0 || bare != n) { if (WellKnown.TryGetValue(bare, out var known)) return known; }
+            return n.ToUpperInvariant();
+        }
+
         private static Principal ReadPrincipal(XmlElement el)
         {
             var sid = Text(Child(el, "SID"));
             var name = Text(Child(el, "Name"));
             if (string.IsNullOrEmpty(name)) name = string.IsNullOrEmpty(sid) ? Text(el) : sid;
-            var id = !string.IsNullOrEmpty(sid) ? sid.ToUpperInvariant() : name.TrimStart('*').ToUpperInvariant();
+            var id = !string.IsNullOrEmpty(sid) ? sid.TrimStart('*').ToUpperInvariant() : NormalizeName(name);
             return new Principal { Id = id, Name = name };
         }
 
         private static GpoSetting ListSetting(string scope, string ext, string category, string key, string display, List<Principal> members)
         {
+            // Sorted for display; SettingDiff compares MemberIds as a set, so the order DISA lists members in is never a change.
             var sorted = members.GroupBy(m => m.Id, StringComparer.OrdinalIgnoreCase).Select(g => g.First())
-                                .OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase).ToList();
+                                .OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase).ThenBy(m => m.Id, StringComparer.Ordinal).ToList();
             return new GpoSetting
             {
                 Scope = scope, Extension = ext, Category = category, Key = key, DisplayName = display,

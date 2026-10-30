@@ -76,13 +76,41 @@ namespace StigGpoManager.Core
             {
                 if (!oldMap.TryGetValue(kv.Key, out var old))
                     changes.Add(Make(ChangeKind.Added, null, kv.Value));
-                else if (!string.Equals(old.Value, kv.Value.Value, StringComparison.Ordinal))
+                else if (!SameValue(old, kv.Value))
                     changes.Add(Make(ChangeKind.Changed, old, kv.Value));
             }
             foreach (var kv in oldMap)
                 if (!newMap.ContainsKey(kv.Key))
                     changes.Add(Make(ChangeKind.Removed, kv.Value, null));
             return changes.OrderBy(c => c.Scope).ThenBy(c => c.Category).ThenBy(c => c.DisplayName, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        /// <summary>
+        /// User rights / restricted groups compare as a set of member identities (SIDs), not as display text:
+        /// the same SIDs in another order, or printed under another name, are not a change.
+        /// </summary>
+        public static bool SameValue(GpoSetting a, GpoSetting b)
+        {
+            if (a.MemberIds != null && b.MemberIds != null)
+            {
+                if (!new HashSet<string>(a.MemberIds, StringComparer.OrdinalIgnoreCase).SetEquals(b.MemberIds)) return false;
+                return string.Equals(Suffix(a.Value), Suffix(b.Value), StringComparison.OrdinalIgnoreCase);
+            }
+            return string.Equals(a.Value, b.Value, StringComparison.Ordinal);
+        }
+
+        private static string Suffix(string v)
+        {
+            var i = (v ?? "").IndexOf(" | MemberOf: ", StringComparison.Ordinal);
+            return i < 0 ? "" : v.Substring(i);
+        }
+
+        private static string Member(List<string> ids, List<string> names, int i)
+        {
+            var id = ids[i];
+            var name = i < names.Count ? names[i] : id;
+            return string.Equals(name.TrimStart('*'), id, StringComparison.OrdinalIgnoreCase) || !id.StartsWith("S-1-", StringComparison.OrdinalIgnoreCase)
+                ? name : $"{name} ({id})";
         }
 
         private static Dictionary<string, GpoSetting> ToMap(IEnumerable<GpoSetting> settings)
@@ -132,7 +160,7 @@ namespace StigGpoManager.Core
                         var have = new HashSet<string>(exSetting.MemberIds ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
                         var missing = new List<string>();
                         for (int i = 0; i < required.Count; i++)
-                            if (!have.Contains(required[i])) missing.Add(i < names.Count ? names[i] : required[i]);
+                            if (!have.Contains(required[i])) missing.Add(Member(required, names, i));
                         findings.Add(new ExceptionFinding
                         {
                             Kind = ExceptionFindingKind.ReplacementTypeConflict, ExceptionGpo = ex.Key, Key = change.Key,
@@ -161,7 +189,7 @@ namespace StigGpoManager.Core
                 foreach (var kv in exMap)
                 {
                     if (!newMap.TryGetValue(kv.Key, out var disa)) continue;
-                    if (!string.Equals(disa.Value, kv.Value.Value, StringComparison.Ordinal)) continue;
+                    if (!SameValue(disa, kv.Value)) continue;
                     findings.Add(new ExceptionFinding
                     {
                         Kind = ExceptionFindingKind.ExceptionMayBeUnnecessary, ExceptionGpo = ex.Key, Key = kv.Key,

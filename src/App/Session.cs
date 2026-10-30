@@ -66,6 +66,8 @@ namespace StigGpoManager
             Engine = new StigEngine(Config, Directory, audit, new RunStore(Config.RunsFolder), User);
             Engine.PromotionChecks.Add(new ScanGateCheck(Engine));
             if (log != null) Engine.Log += log;
+            // Each Invoke-GPUpdate runs in its own runspace with a time limit, so several can run at once.
+            if (Directory is PowerShellDirectory) Engine.RefreshParallelism = 8;
         }
 
         /// <summary>Full pre-flight: host checks, AD checks, Domain Admins, optional dcdiag.</summary>

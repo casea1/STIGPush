@@ -63,7 +63,15 @@ namespace StigGpoManager.Core
         private void PlanPlacement(OperationPlan plan, RunItem item, string target)
         {
             List<LinkInfo> current;
-            try { current = Directory.GetLinks(target); }
+            try
+            {
+                if (!Directory.ContainerExists(target))
+                {
+                    plan.Blockers.Add($"Target OU {target} (mapping '{item.MappingKey}') does not exist in AD. Fix the OU in config.json (Settings) or create it in AD Users and Computers.");
+                    return;
+                }
+                current = Directory.GetLinks(target);
+            }
             catch (Exception ex) { plan.Blockers.Add($"Cannot read links on {target}: {ex.Message}"); return; }
             var existing = current.FirstOrDefault(l => LinkOrdering.SameGpo(l.GpoId, item.NewGpoId));
             var desired = LinkOrdering.PlaceNewLink(current, NewLinkFor(item), item.OlderVersionIds, Config);
@@ -380,18 +388,27 @@ namespace StigGpoManager.Core
             return computers.ToList();
         }
 
+        /// <summary>Computers refreshed at the same time (the directory must be thread-safe for more than 1).</summary>
+        public int RefreshParallelism { get; set; } = 1;
+
         public List<GpUpdateResult> ExecuteRefresh(RunState run, IEnumerable<string> computers, Action<GpUpdateResult> onResult = null)
         {
+            var list = computers.ToList();
             var results = new List<GpUpdateResult>();
-            foreach (var c in computers)
+            var gate = new object();
+            System.Threading.Tasks.Parallel.ForEach(list, new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = Math.Max(1, RefreshParallelism) }, c =>
             {
                 GpUpdateResult r;
                 try { r = Directory.InvokeGpUpdate(c); }
                 catch (Exception ex) { r = new GpUpdateResult { Computer = c, Success = false, Message = ex.Message }; }
-                Audit.Write(run?.RunId, "InvokeGPUpdate", c, r.Success ? "Success" : "Failure", r.Success ? null : r.Message);
-                results.Add(r);
-                onResult?.Invoke(r);
-            }
+                lock (gate)
+                {
+                    Audit.Write(run?.RunId, "InvokeGPUpdate", c, r.Success ? "Success" : "Failure", r.Success ? null : r.Message);
+                    results.Add(r);
+                    onResult?.Invoke(r);
+                }
+            });
+            results = results.OrderBy(r => list.IndexOf(r.Computer)).ToList();
             Info($"Policy refresh: {results.Count(r => r.Success)} succeeded, {results.Count(r => !r.Success)} failed. Some settings need logoff or reboot to apply.");
             return results;
         }

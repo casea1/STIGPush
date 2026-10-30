@@ -54,8 +54,51 @@ namespace StigGpoManager.Core
                 }
                 list.Add(c);
             }
+            PickDuplicates(list);
             FlagConflicts(list);
             return list;
+        }
+
+        /// <summary>
+        /// DISA packages sometimes carry the same GPO twice (e.g. two Adobe backups producing the same name).
+        /// Keep one, chosen the same way every time: highest version, then newest backup time, then the
+        /// backup folder path (ordinal). The others are skipped with a note; the admin can still swap them.
+        /// </summary>
+        public static void PickDuplicates(List<ImportCandidate> candidates)
+        {
+            foreach (var g in candidates.Where(c => !c.Skip && c.ProposedName != null)
+                                        .GroupBy(c => c.ProposedName, StringComparer.OrdinalIgnoreCase)
+                                        .Where(g => g.Count() > 1).ToList())
+            {
+                var ordered = g.OrderByDescending(c => c.Version)
+                               .ThenByDescending(c => BackupTime(c.Backup))
+                               .ThenBy(c => c.Backup.BackupFolder ?? c.Backup.BackupId ?? "", StringComparer.OrdinalIgnoreCase)
+                               .ToList();
+                var keep = ordered[0];
+                var keepHash = ReportHash(keep.Backup);
+                foreach (var c in ordered.Skip(1))
+                {
+                    c.Skip = true;
+                    var same = keepHash != null && keepHash == ReportHash(c.Backup);
+                    c.Problem = $"Duplicate of the backup in {Where(keep.Backup)} (same name '{g.Key}'{(same ? ", identical settings" : "")}); skipped. " +
+                                "The tool keeps the highest version / newest backup; tick this one and untick the other to swap.";
+                }
+                keep.Problem = (keep.Problem == null ? "" : keep.Problem + " ") +
+                               $"{ordered.Count - 1} duplicate(s) of this backup in the package were skipped (this one is the newest).";
+            }
+        }
+
+        private static DateTime BackupTime(GpoBackupInfo b) =>
+            DateTime.TryParse(b.BackupTime, System.Globalization.CultureInfo.InvariantCulture,
+                              System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var t) ? t : DateTime.MinValue;
+
+        private static string Where(GpoBackupInfo b) =>
+            string.IsNullOrEmpty(b.ProductFolder) ? b.BackupId : b.ProductFolder + "\\" + System.IO.Path.GetFileName(b.BackupFolder ?? b.BackupId);
+
+        private static string ReportHash(GpoBackupInfo b)
+        {
+            try { return b.ReportPath != null && System.IO.File.Exists(b.ReportPath) ? PackageScanner.ComputeSha256(b.ReportPath) : null; }
+            catch { return null; }
         }
 
         /// <summary>Mapping whose name template shares the most words with the backup name (needs at least 60% overlap).</summary>

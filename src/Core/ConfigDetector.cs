@@ -257,6 +257,7 @@ namespace StigGpoManager.Core
             if (!string.IsNullOrWhiteSpace(c.PilotGroup)) o["PilotGroup"] = c.PilotGroup;
             if (!string.IsNullOrWhiteSpace(c.CentralStorePath)) o["CentralStorePath"] = c.CentralStorePath;
             o["WriteGpoComment"] = c.WriteGpoComment;
+            o["MigrationTable"] = string.IsNullOrWhiteSpace(c.MigrationTable) ? "auto" : c.MigrationTable;
             o["SoakDays"] = c.SoakDays;
             o["RequireScanGate"] = c.RequireScanGate;
             var maps = new List<object>();

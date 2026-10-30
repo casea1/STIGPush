@@ -95,6 +95,7 @@ namespace StigGpoManager.Tests
             // Pilot (OU-based): only the pilot OU gets a link
             var pilotPlan = _engine.PlanPilot(run);
             Assert.Empty(pilotPlan.Blockers);
+            Assert.Contains(pilotPlan.Warnings, w => w.Contains("linked on parent") && w.Contains(Ex) && w.Contains("takes precedence"));
             Assert.Empty(pilotPlan.RequiredAcknowledgements);
             _engine.ExecutePilot(run);
             Assert.Equal(new[] { New }, _ad.OrderNames(TestData.PilotOu));
@@ -280,6 +281,64 @@ namespace StigGpoManager.Tests
             Assert.StartsWith(first, all);
             Assert.Equal(2, log.ReadAll().Count);
             Assert.Equal("boom", Json.GetString(log.ReadAll()[1], "error"));
+        }
+
+        [Fact]
+        public void ImportMapsDisaDomainGroupsWithAMigrationTable()
+        {
+            _ad.Groups.Add("Domain Admins");
+            _ad.Groups.Add("Enterprise Admins");
+            var backupXml = TestData.BackupXml(("Domain Admins", "S-1-5-21-111-222-333-512", "GlobalGroup"),
+                                               ("Enterprise Admins", "S-1-5-21-111-222-333-519", "UniversalGroup"),
+                                               ("DISA Test Operators", "S-1-5-21-111-222-333-1105", "GlobalGroup"),
+                                               ("Domain Admins", _ad.GetDomain().DomainSid + "-512", "GlobalGroup")); // already this domain: left alone
+            var tmp2 = new TempDir();
+            try
+            {
+                var zip = TestData.BuildPackage(tmp2, TestData.Report(New, TestData.UserRight("SeDenyRemoteInteractiveLogonRight", "DISATEST\\Domain Admins")), null, backupXml);
+                var run = _engine.CreateRun(zip, null, out var scan);
+                var candidates = MappingResolver.Resolve(scan.Backups, _cfg);
+                foreach (var c in candidates) c.Skip = c.Mapping?.Key != "DoD WinSvr2025 MS STIG Comp {Version}";
+                Assert.Equal(4, candidates.Single(c => !c.Skip).Backup.ForeignPrincipals.Count);
+
+                var plan = _engine.PlanImport(run, candidates);
+                var mig = plan.Changes.Single(c => c.Kind == "Migration table");
+                Assert.Contains("DISATEST\\Domain Admins (S-1-5-21-111-222-333-512) -> Domain Admins@" + _cfg.Domain, mig.Description);
+                Assert.Contains("Enterprise Admins@" + _cfg.Domain, mig.Description);
+                Assert.Contains(plan.Warnings, w => w.Contains("DISA Test Operators") && w.Contains("imported unchanged"));
+
+                _engine.ExecuteImport(run, candidates);
+                var call = _ad.Calls.Single(c => c.StartsWith("ImportNewGpo"));
+                Assert.Contains("migtable=", call);
+                var path = call.Substring(call.IndexOf("migtable=") + 9);
+                var xml = File.ReadAllText(path);
+                Assert.Contains("<Source>Domain Admins@disa.test</Source>", xml);
+                Assert.Contains("<Destination>Domain Admins@" + _cfg.Domain + "</Destination>", xml);
+                Assert.Contains("<Type>DomainUniversalGroup</Type>", xml);
+                Assert.DoesNotContain("DISA Test Operators", xml);
+                Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(xml, "<Mapping>").Count);
+                Assert.Contains(_engine.Audit.ReadAll(run.RunId), a => Json.GetString(a, "action") == "WriteMigrationTable");
+
+                // "none" imports unchanged but says what will not resolve.
+                _cfg.MigrationTable = "none";
+                Assert.DoesNotContain(_engine.PlanImport(run, candidates).Changes, c => c.Kind == "Migration table");
+                Assert.Contains(_engine.PlanImport(run, candidates).Warnings, w => w.Contains("will not resolve"));
+                _cfg.MigrationTable = Path.Combine(_tmp.Path, "missing.migtable");
+                Assert.Contains(_engine.PlanImport(run, candidates).Blockers, b => b.Contains("not found"));
+            }
+            finally { tmp2.Dispose(); }
+        }
+
+        [Fact]
+        public void MissingTargetOuIsABlockerNotACrash()
+        {
+            var run = ImportMemberServer();
+            _ad.Containers.Remove(AppConfig.NormalizeDn(TestData.PilotOu));
+            var plan = _engine.PlanPilot(run);
+            Assert.Contains(plan.Blockers, b => b.Contains(TestData.PilotOu) && b.Contains("does not exist"));
+            Assert.Throws<InvalidOperationException>(() => _engine.ExecutePilot(run));
+            Assert.DoesNotContain(_ad.Calls, c => c.StartsWith("NewLink"));
+            Assert.Contains(_engine.Preflight(), r => r.Name == "Target OUs exist" && r.Status == CheckStatus.Fail && r.Detail.Contains(TestData.PilotOu));
         }
     }
 }

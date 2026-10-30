@@ -93,6 +93,14 @@ namespace StigGpoManager.Core
         public string CentralStorePath { get; set; }
         /// <summary>Write source package, version and import date into the new GPO's comment.</summary>
         public bool WriteGpoComment { get; set; } = true;
+        /// <summary>
+        /// "auto" (default): when DISA's backups refer to groups of DISA's own domain (Domain Admins, Enterprise
+        /// Admins...), build a migration table that maps them to this domain's groups. "none": import unchanged.
+        /// Or the path of a .migtable made in the GPMC Migration Table Editor.
+        /// </summary>
+        public string MigrationTable { get; set; } = "auto";
+        public bool MigrationAuto => string.IsNullOrWhiteSpace(MigrationTable) || MigrationTable.Trim().Equals("auto", StringComparison.OrdinalIgnoreCase);
+        public bool MigrationNone => (MigrationTable ?? "").Trim().Equals("none", StringComparison.OrdinalIgnoreCase);
         /// <summary>Planned soak length in days, used for the tray status ("Pilot - day 9 of 14").</summary>
         public int SoakDays { get; set; } = 14;
         /// <summary>Phase 2: Promote is blocked unless pilot scan results are imported and every open finding is in the exceptions register.</summary>
@@ -165,7 +173,7 @@ namespace StigGpoManager.Core
             var known = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
             {
                 "Domain", "TargetDC", "ExceptionPrefix", "DisaGpoPrefix", "WorkingFolder", "Language", "PilotGroup",
-                "CentralStorePath", "WriteGpoComment", "SoakDays", "RequireScanGate", "Mappings"
+                "CentralStorePath", "WriteGpoComment", "MigrationTable", "SoakDays", "RequireScanGate", "Mappings"
             };
             foreach (var k in o.Keys.Where(k => !known.Contains(k) && !k.StartsWith("_")))
                 issues.Add(Warn($"Unknown setting '{k}' is ignored (check spelling)."));
@@ -181,6 +189,7 @@ namespace StigGpoManager.Core
                 PilotGroup = Json.GetString(o, "PilotGroup"),
                 CentralStorePath = Json.GetString(o, "CentralStorePath"),
                 WriteGpoComment = Json.GetBool(o, "WriteGpoComment", true),
+                MigrationTable = Json.GetString(o, "MigrationTable") ?? "auto",
                 SoakDays = (int)Json.GetLong(o, "SoakDays", 14),
                 RequireScanGate = Json.GetBool(o, "RequireScanGate", true),
             };

@@ -68,7 +68,7 @@ when DISA's package has been transferred in.
 |---|---|---|
 | **1. Prepare** | Drop the zip. The tool shows its SHA-256 (paste the expected hash to compare), lists every GPO in the package and the name each will get, e.g. `DoD WinSvr2025 MS STIG Comp v1r4`. Red rows match none of your mappings: pick one, or use *Use suggested mappings*. Click **Import**. | Backs up every GPO, updates the Central Store if newer templates are in the package (never downgrades), and creates the new GPOs. Never overwrites an existing GPO; links nothing. |
 | **2. Review** | Read the flagged rows; the full HTML/CSV report is saved. **Red**: a user right or restricted group that one of your exception GPOs replaces (its list must contain every STIG entry). **Yellow**: an exception that may need review or may no longer be needed. | No |
-| **3. Pilot** | Click **Start pilot**, then gpupdate and scan the pilot machines and test. Drop SCC / Evaluate-STIG results (CKL, CKLB, XCCDF) here: open findings that aren't in the exceptions register block Promote. The soak countdown runs; you can close the tool and come back. | Links the new GPOs to the pilot OUs (or at production, filtered to the pilot group), below your exception GPOs. |
+| **3. Pilot** | Click **Start pilot**, then gpupdate and scan the pilot machines and test. Drop SCC / Evaluate-STIG results (CKL, CKLB, XCCDF) here: open findings, and rules the scanner reported as *error*, block Promote unless they're in the exceptions register. A host where no rule was evaluated at all (every result error or not checked) also blocks: that scan didn't really run. The soak countdown runs; you can close the tool and come back. | Links the new GPOs to the pilot OUs (or at production, filtered to the pilot group), below your exception GPOs. |
 | **4. Promote** | Click **Promote to production** and type PROMOTE, then refresh policy on the listed computers. | Links the new GPOs to production, disables the old version's links (kept for rollback), removes pilot links. |
 
 Next quarter, **Clean up old versions** (on Home) lists DISA GPOs two or more versions old with no
@@ -133,6 +133,7 @@ You rarely need to edit it by hand; if you do, problems are listed under **Healt
 | `SoakDays` | Pilot soak length shown on the calendar and tray. Default 14. |
 | `RequireScanGate` | Block Promote until pilot scan results pass. Default `true`. |
 | `WriteGpoComment` | Write package, version and import date into each new GPO's comment. Default `true`. |
+| `MigrationTable` | `auto` (default): when DISA's backups name groups from DISA's own domain (Domain Admins, Enterprise Admins...), the import maps them to this domain's groups with a migration table (shown in the Import confirmation, saved with the run). `none`: import unchanged. Or the path of a `.migtable` made in the GPMC Migration Table Editor. |
 | `CentralStorePath` | Only if the Central Store isn't at `\\<domain>\SYSVOL\<domain>\Policies\PolicyDefinitions`. |
 
 Each **mapping** says how a DISA GPO is named and linked: `Match` (regex on the GPO name in DISA's
@@ -161,7 +162,10 @@ every link change, confirmations, backups, scan evidence and gate outcome, and t
 ## Command line
 
 Run from an elevated console. Commands that change AD print their plan and act only with `--yes`
-(or `--confirm PROMOTE` / `--confirm DELETE`); `--whatif` never acts.
+(or `--confirm PROMOTE` / `--confirm DELETE`); `--whatif` never acts. The exe is a Windows program, so in
+PowerShell pipe its output to make the shell wait and set `$LASTEXITCODE`, e.g.
+`& "C:\Program Files\StigGpoManager\StigGpoManager.exe" cli preflight | Out-Host`. That also works over
+WinRM (`Invoke-Command`). Exit codes: 0 success, 1 error, 2 blocked or confirmation needed.
 
 ```
 StigGpoManager.exe cli detect [--save]
@@ -178,6 +182,7 @@ StigGpoManager.exe cli refresh --run <id> --yes
 StigGpoManager.exe cli rollback --run <id> [--gpo "<name>"] --yes
 StigGpoManager.exe cli cleanup [--delete "<name>" ... --confirm DELETE]
 StigGpoManager.exe cli report --run <id>
+StigGpoManager.exe cli version
 ```
 
 ## How link order is decided
@@ -214,6 +219,11 @@ packaging/  Inno Setup script
 - **Not yet run against a real domain.** The logic and full quarterly cycles are tested against a
   simulated AD, and the exe and installer are built and exercised on Windows. The PowerShell/AD path
   needs a full lab quarter first: prepare, pilot, promote, roll back and clean up, then check the audit log.
+- User rights and restricted groups are compared by member SID, so DISA reordering members or printing
+  a SID instead of a name is not reported as a change. A replaced right your exception GPO lacks an
+  entry for is named with its SID.
+- A package that holds the same GPO twice (it happens with Adobe) is resolved the same way every time:
+  highest version, then newest backup, then folder path; the other copy is skipped and labelled.
 - The review understands security settings (account policy, user rights, security options, restricted
   groups, services, audit), Administrative Templates, advanced audit and registry settings; other
   extensions (firewall, preferences) are compared item by item.

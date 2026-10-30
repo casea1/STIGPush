@@ -148,8 +148,8 @@ namespace StigGpoManager.Core
             sb.Append($"<p>Gate: <span class=\"{(gate.Passed ? "pass" : "fail")}\">{(gate.Passed ? "PASS" : "FAIL")}</span> - {H(gate.Summary)}</p>");
             if (gate.Blocking.Count > 0)
             {
-                sb.Append("<h2>Blocking open findings (not in exceptions register)</h2><table><tr><th>Host</th><th>V-ID</th><th>STIG</th><th>Title</th><th>Source</th></tr>");
-                foreach (var f in gate.Blocking) sb.Append($"<tr class=s2><td>{H(f.Host)}</td><td>{H(f.VulnId)}</td><td>{H(f.StigName)}</td><td>{H(f.Title)}</td><td>{H(f.SourceFile)}</td></tr>");
+                sb.Append("<h2>Blocking findings: open or not evaluated (error), not in exceptions register</h2><table><tr><th>Host</th><th>V-ID</th><th>STIG</th><th>Title</th><th>Source</th></tr>");
+                foreach (var f in gate.Blocking) sb.Append($"<tr class=s2><td>{H(f.Host)}</td><td>{H(f.DisplayId)}{(f.Status == ScanStatus.Error ? " (error)" : "")}</td><td>{H(f.StigName)}</td><td>{H(f.Title)}</td><td>{H(f.SourceFile)}</td></tr>");
                 sb.Append("</table>");
             }
             if (gate.Expected.Count > 0)

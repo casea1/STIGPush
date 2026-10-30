@@ -8,6 +8,8 @@
   "Language": "en-US",
   "PilotGroup": "GPO-Pilot",
   "WriteGpoComment": true,
+  "_MigrationTable": "auto = map DISA's domain groups (Domain Admins, Enterprise Admins...) to this domain's on import; none = import unchanged; or a .migtable path",
+  "MigrationTable": "auto",
   "SoakDays": 14,
   "RequireScanGate": true,
   "Mappings": [

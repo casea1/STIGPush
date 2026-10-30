@@ -115,9 +115,9 @@ namespace StigGpoManager.Core
             Renumber(l);
         }
 
-        public GpoInfo ImportNewGpo(string backupRoot, string backupId, string targetName)
+        public GpoInfo ImportNewGpo(string backupRoot, string backupId, string targetName, string migrationTable = null)
         {
-            Calls.Add($"ImportNewGpo {targetName}");
+            Calls.Add($"ImportNewGpo {targetName}" + (migrationTable == null ? "" : " migtable=" + migrationTable));
             if (GetGpoByName(targetName) != null) throw new InvalidOperationException("exists");
             var report = Path.Combine(backupRoot, backupId, "gpreport.xml");
             var id = AddGpo(targetName, File.Exists(report) ? File.ReadAllText(report) : null);

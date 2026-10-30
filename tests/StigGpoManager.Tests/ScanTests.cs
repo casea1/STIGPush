@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using System.IO;
 using System.Linq;
@@ -115,6 +116,81 @@ namespace StigGpoManager.Tests
                 Assert.Equal(2, ExceptionsRegister.Load(path).Entries.Count);
                 Assert.Single(Directory.GetFiles(Path.Combine(tmp.Path, "exceptions-history")));
             }
+        }
+
+        private static List<ScanFinding> Xccdf(string host, params (string idref, string result)[] rules)
+        {
+            var sb = new System.Text.StringBuilder(@"<?xml version=""1.0""?><cdf:Benchmark xmlns:cdf=""http://checklists.nist.gov/xccdf/1.2"" id=""b""><cdf:title>Windows 11 STIG</cdf:title><cdf:TestResult id=""r""><cdf:target>" + host + "</cdf:target>");
+            foreach (var r in rules) sb.Append($"<cdf:rule-result idref=\"{r.idref}\"><cdf:result>{r.result}</cdf:result></cdf:rule-result>");
+            sb.Append("</cdf:TestResult></cdf:Benchmark>");
+            return ScanParser.ParseXccdf(PackageScanner.LoadXmlString(sb.ToString()), host + ".xml").Findings;
+        }
+
+        [Fact]
+        public void ScanThatEvaluatedNothingBlocksTheGate()
+        {
+            // Every rule error / notchecked: the scan never really ran, so it must not look clean.
+            var pilot = Xccdf("ws01", ("xccdf_mil.disa.stig_rule_SV-1r1_rule", "error"), ("xccdf_mil.disa.stig_rule_SV-2r1_rule", "notchecked"), ("xccdf_mil.disa.stig_rule_SV-3r1_rule", "notchecked"));
+            var g = ScanGate.Evaluate(pilot, null, new ExceptionsRegister());
+            Assert.False(g.Passed);
+            Assert.Contains("ws01", g.UnevaluatedHosts);
+            Assert.Contains("did not run properly", g.Summary);
+
+            var onlyNotChecked = Xccdf("ws02", ("xccdf_mil.disa.stig_rule_SV-2r1_rule", "notchecked"));
+            Assert.False(ScanGate.Evaluate(onlyNotChecked, null, new ExceptionsRegister()).Passed);
+        }
+
+        [Fact]
+        public void ErrorResultBlocksUnlessInRegister()
+        {
+            var pilot = Xccdf("ws01", ("xccdf_mil.disa.stig_rule_SV-1r1_rule", "pass"), ("xccdf_mil.disa.stig_rule_SV-2r1_rule", "error"));
+            Assert.Equal(ScanStatus.Error, pilot[1].Status);
+            var g = ScanGate.Evaluate(pilot, null, new ExceptionsRegister());
+            Assert.False(g.Passed);
+            Assert.Single(g.Blocking);
+            var reg = new ExceptionsRegister { Entries = { new ExceptionEntry { VulnId = "SV-2", Justification = "Check errors on this build; manual check NAF" } } };
+            Assert.True(ScanGate.Evaluate(pilot, null, reg).Passed);
+        }
+
+        [Fact]
+        public void ResultWithoutVulnIdMatchesRegisterByRuleIdAnyRevision()
+        {
+            var pilot = Xccdf("ws01", ("xccdf_mil.disa.stig_rule_SV-253256r828891_rule", "fail"), ("xccdf_mil.disa.stig_rule_SV-9r1_rule", "pass"));
+            var f = pilot[0];
+            Assert.False(f.HasVulnId);
+            Assert.Equal("SV-253256", f.VulnId);
+            var g = ScanGate.Evaluate(pilot, null, new ExceptionsRegister());
+            Assert.False(g.Passed);
+            Assert.Equal(2, g.WithoutVulnId); // neither result carries a V-ID
+            Assert.Contains("SV- rule ID", g.Summary);
+            foreach (var id in new[] { "SV-253256", "sv-253256r999999_rule", "SV-253256r828891_rule" })
+            {
+                var reg = new ExceptionsRegister { Entries = { new ExceptionEntry { VulnId = id, Justification = "Accepted" } } };
+                Assert.Empty(reg.Validate());
+                Assert.True(ScanGate.Evaluate(pilot, null, reg).Passed, id);
+            }
+        }
+
+        [Fact]
+        public void VulnIdsMatchRegardlessOfCase()
+        {
+            var ckl = ScanParser.ParseCkl(PackageScanner.LoadXmlString(TestData.Ckl("h1", "Windows 11 STIG", ("v-278005", "Open"))), "h1.ckl").Findings;
+            Assert.Equal("V-278005", ckl[0].VulnId);
+            const string xml = @"<?xml version=""1.0""?><cdf:Benchmark xmlns:cdf=""http://checklists.nist.gov/xccdf/1.2"" id=""b""><cdf:title>Windows 11 STIG</cdf:title>
+<cdf:Group id=""xccdf_mil.disa.stig_group_v-278006""><cdf:Rule id=""r1""><cdf:title>t</cdf:title></cdf:Rule></cdf:Group>
+<cdf:TestResult id=""r""><cdf:target>h1</cdf:target><cdf:rule-result idref=""r1""><cdf:result>fail</cdf:result></cdf:rule-result>
+<cdf:rule-result idref=""r2""><cdf:result>FAIL</cdf:result><cdf:ident> v-278007 </cdf:ident></cdf:rule-result></cdf:TestResult></cdf:Benchmark>";
+            var x = ScanParser.ParseXccdf(PackageScanner.LoadXmlString(xml), "h1.xml").Findings;
+            Assert.Equal(new[] { "V-278006", "V-278007" }, x.Select(f => f.VulnId).ToArray());
+            Assert.All(x, f => Assert.Equal(ScanStatus.Open, f.Status));
+            var reg = new ExceptionsRegister { Entries =
+            {
+                new ExceptionEntry { VulnId = " V-278005", Justification = "a" },
+                new ExceptionEntry { VulnId = "v-278006", Justification = "b" },
+                new ExceptionEntry { VulnId = "V-278007", Justification = "c", StigName = "windows 11" },
+            } };
+            Assert.Empty(reg.Validate());
+            Assert.True(ScanGate.Evaluate(ckl.Concat(x), null, reg).Passed);
         }
     }
 }

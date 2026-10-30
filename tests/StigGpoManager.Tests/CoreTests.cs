@@ -235,7 +235,29 @@ namespace StigGpoManager.Tests
         public void DuplicateProposedNamesBlockImport()
         {
             var c = MappingResolver.Resolve(new[] { B("DoD WinSvr 2025 Member Server STIG Computer v1r4"), B("DoD WinSvr 2025 Member Server Computer v1r4 copy") }, Cfg());
+            // Duplicates are resolved to one automatically; forcing both back on still blocks.
+            Assert.Single(c, x => !x.Skip);
+            Assert.Empty(MappingResolver.ValidateSelection(c));
+            foreach (var x in c) x.Skip = false;
             Assert.Contains(MappingResolver.ValidateSelection(c), p => p.Contains("More than one"));
+        }
+
+        [Fact]
+        public void DuplicateBackupsArePickedTheSameWayEveryTime()
+        {
+            GpoBackupInfo Adobe(string folder, string time) => new GpoBackupInfo
+            {
+                DisplayName = "DoD WinSvr 2025 Member Server STIG Computer v1r4", BackupId = "{" + folder + "}", BackupFolder = "/pkg/Adobe/" + folder,
+                ProductFolder = "Adobe", BackupTime = time, DetectedVersion = StigVersion.TryParse("v1r4"),
+            };
+            var a = Adobe("B2", "2026-09-30T10:00:00"); var b = Adobe("A1", "2026-09-30T10:00:00"); var newest = Adobe("C3", "2026-10-01T08:00:00");
+            foreach (var order in new[] { new[] { a, b, newest }, new[] { newest, b, a }, new[] { b, newest, a } })
+            {
+                var c = MappingResolver.Resolve(order, Cfg());
+                Assert.Same(newest, c.Single(x => !x.Skip).Backup);
+            }
+            foreach (var order in new[] { new[] { a, b }, new[] { b, a } })
+                Assert.Same(b, MappingResolver.Resolve(order, Cfg()).Single(x => !x.Skip).Backup); // same time: folder path decides
         }
     }
 
@@ -357,11 +379,56 @@ namespace StigGpoManager.Tests
             Assert.Contains(f, x => x.Kind == ExceptionFindingKind.ExceptionMayNeedReview && x.DisplayName == "Password/MinimumPasswordLength");
             Assert.Contains(f, x => x.Kind == ExceptionFindingKind.ExceptionMayBeUnnecessary && x.DisplayName == "C/Turn off Autoplay");
             var repl = f.Single(x => x.Kind == ExceptionFindingKind.ReplacementTypeConflict);
-            Assert.Equal(new[] { "NT AUTHORITY\\Local account" }, repl.MissingEntries);
+            Assert.Equal(new[] { "NT AUTHORITY\\Local account (S-1-5-113)" }, repl.MissingEntries);
             Assert.Contains("missing STIG entries", repl.Message);
 
             var rows = SettingDiff.BuildRows("m", "new", "old", diff, f);
             Assert.Contains(rows, r => r.Severity == 2 && r.Setting == "SeDenyNetworkLogonRight");
+        }
+    }
+
+    public class TesterDiffCases
+    {
+        private static List<GpoSetting> P(params string[] items) => GpoSettingsParser.Parse(GpoReportXml.Report("g", items));
+
+        [Fact]
+        public void UserRightMemberOrderIsNotAChange()
+        {
+            // WinSvr 2025 MS v1r2 -> v1r4: only the order of SIDs in user rights changed.
+            var v1r2 = P(GpoReportXml.UserRightSids("SeDenyNetworkLogonRight", ("BUILTIN\\Guests", "S-1-5-32-546"), ("NT AUTHORITY\\Local account", "S-1-5-113"), (null, "S-1-5-21-1-2-3-512")),
+                         GpoReportXml.UserRightSids("SeBackupPrivilege", ("BUILTIN\\Administrators", "S-1-5-32-544")));
+            var v1r4 = P(GpoReportXml.UserRightSids("SeDenyNetworkLogonRight", (null, "S-1-5-21-1-2-3-512"), ("Local account", "S-1-5-113"), ("BUILTIN\\Guests", "S-1-5-32-546")),
+                         GpoReportXml.UserRight("SeBackupPrivilege", "*S-1-5-32-544"));
+            Assert.Empty(SettingDiff.Compare(v1r2, v1r4));
+            // Names without SIDs resolve to the same well-known identities.
+            Assert.Empty(SettingDiff.Compare(P(GpoReportXml.UserRight("SeBackupPrivilege", "BUILTIN\\Administrators")), v1r4.Where(x => x.DisplayName == "SeBackupPrivilege")));
+            // A real membership change is still a change.
+            var changed = P(GpoReportXml.UserRightSids("SeBackupPrivilege", ("BUILTIN\\Administrators", "S-1-5-32-544"), ("BUILTIN\\Backup Operators", "S-1-5-32-551")));
+            Assert.Single(SettingDiff.Compare(v1r4.Where(x => x.DisplayName == "SeBackupPrivilege"), changed));
+        }
+
+        [Fact]
+        public void Win11ImpersonateGainsSidAndExceptionIsWarnedWithTheMissingSid()
+        {
+            const string sid99 = "S-1-5-99-216390572-1995538116-3857911515-2404958512-2623887229";
+            var v2r8 = P(GpoReportXml.UserRightSids("SeImpersonatePrivilege", ("BUILTIN\\Administrators", "S-1-5-32-544"), ("NT AUTHORITY\\SERVICE", "S-1-5-6"), ("NT AUTHORITY\\LOCAL SERVICE", "S-1-5-19"), ("NT AUTHORITY\\NETWORK SERVICE", "S-1-5-20")));
+            var v2r11 = P(GpoReportXml.UserRightSids("SeImpersonatePrivilege", ("BUILTIN\\Administrators", "S-1-5-32-544"), ("NT AUTHORITY\\SERVICE", "S-1-5-6"), ("NT AUTHORITY\\LOCAL SERVICE", "S-1-5-19"), ("NT AUTHORITY\\NETWORK SERVICE", "S-1-5-20"), (null, sid99)),
+                          GpoReportXml.RegistryValue("HKLM\\Software\\Policies\\Microsoft\\Windows\\AppPrivacy", "LetAppsActivateWithVoice", 2));
+            var changes = SettingDiff.Compare(v2r8, v2r11);
+            Assert.Equal(2, changes.Count);
+            var right = changes.Single(c => c.DisplayName == "SeImpersonatePrivilege");
+            Assert.Equal(ChangeKind.Changed, right.Kind);
+            Assert.Contains(sid99, right.NewValue);
+            var voice = changes.Single(c => c.Kind == ChangeKind.Added);
+            Assert.EndsWith("LetAppsActivateWithVoice", voice.DisplayName);
+            Assert.Contains("2", voice.NewValue);
+
+            // Site exception that replaces the right (keeps the old list + a site account) must name the missing SID.
+            var ex = P(GpoReportXml.UserRightSids("SeImpersonatePrivilege", ("BUILTIN\\Administrators", "S-1-5-32-544"), ("NT AUTHORITY\\SERVICE", "S-1-5-6"), ("NT AUTHORITY\\LOCAL SERVICE", "S-1-5-19"), ("NT AUTHORITY\\NETWORK SERVICE", "S-1-5-20"), ("LAB\\svc-iis", "S-1-5-21-9-9-9-1105")));
+            var findings = SettingDiff.CrossCheck(changes, v2r11, new Dictionary<string, List<GpoSetting>> { { "ACME - Win11 Exceptions", ex } });
+            var f = findings.Single(x => x.Kind == ExceptionFindingKind.ReplacementTypeConflict);
+            Assert.Equal(new[] { sid99 }, f.MissingEntries.ToArray());
+            Assert.Contains(sid99, f.Message);
         }
     }
 }
