@@ -1,0 +1,38 @@
+{
+  "_readme": "STIG GPO Manager configuration. Keys starting with _ are comments. Backslashes must be doubled. See README.md.",
+  "Domain": "corp.example.com",
+  "TargetDC": "auto-pdc",
+  "ExceptionPrefix": "SITE - ",
+  "DisaGpoPrefix": "DoD ",
+  "WorkingFolder": "D:\\StigGpoManager",
+  "Language": "en-US",
+  "PilotGroup": "GPO-Pilot",
+  "WriteGpoComment": true,
+  "SoakDays": 14,
+  "RequireScanGate": true,
+  "Mappings": [
+    {
+      "Match": "WinSvr 2025.*Member Server.*Computer",
+      "NameTemplate": "DoD WinSvr2025 MS STIG Comp {Version}",
+      "PilotTargets": ["OU=Pilot,OU=Server2025,OU=Servers,OU=Computers,OU=ORG,DC=corp,DC=example,DC=com"],
+      "ProdTargets": [
+        "OU=Server2025,OU=Servers,OU=Computers,OU=ORG,DC=corp,DC=example,DC=com",
+        "OU=Servers,OU=Admin,OU=ORG,DC=corp,DC=example,DC=com"
+      ]
+    },
+    {
+      "Match": "WinSvr 2025.*Domain Controller.*Computer",
+      "NameTemplate": "DoD WinSvr2025 DC STIG Comp {Version}",
+      "PilotTargets": [],
+      "ProdTargets": ["OU=Domain Controllers,DC=corp,DC=example,DC=com"],
+      "Notes": "No PilotTargets: pilot is group-based (PilotGroup) at the Domain Controllers OU. Put one DC in GPO-Pilot."
+    },
+    {
+      "Match": "Windows 11.*User",
+      "NameTemplate": "DoD Win11 STIG User {Version}",
+      "PilotTargets": ["OU=Pilot,OU=Win11,OU=Workstations,OU=Computers,OU=ORG,DC=corp,DC=example,DC=com"],
+      "ProdTargets": ["OU=Win11,OU=Workstations,OU=Computers,OU=ORG,DC=corp,DC=example,DC=com"],
+      "Notes": "User-side GPO; applied via loopback (Merge) on the target OU"
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{350B6DF0-0013-4F63-8343-2092E794B80B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StigGpoManager", "src\App\StigGpoManager.csproj", "{D6BF083A-944B-44D9-9D98-4B5F9BD664D0}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{3C8A401C-051A-4E6D-84FB-1EEE2C9F91F1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "StigGpoManager.Tests", "tests\StigGpoManager.Tests\StigGpoManager.Tests.csproj", "{6EFCEBA7-87F3-4506-9754-BEAEE614728A}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{D6BF083A-944B-44D9-9D98-4B5F9BD664D0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D6BF083A-944B-44D9-9D98-4B5F9BD664D0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D6BF083A-944B-44D9-9D98-4B5F9BD664D0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D6BF083A-944B-44D9-9D98-4B5F9BD664D0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6EFCEBA7-87F3-4506-9754-BEAEE614728A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6EFCEBA7-87F3-4506-9754-BEAEE614728A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6EFCEBA7-87F3-4506-9754-BEAEE614728A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6EFCEBA7-87F3-4506-9754-BEAEE614728A}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{D6BF083A-944B-44D9-9D98-4B5F9BD664D0} = {350B6DF0-0013-4F63-8343-2092E794B80B}
+		{6EFCEBA7-87F3-4506-9754-BEAEE614728A} = {3C8A401C-051A-4E6D-84FB-1EEE2C9F91F1}
+	EndGlobalSection
+EndGlobal

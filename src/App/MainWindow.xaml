@@ -1,0 +1,580 @@
+<Window x:Class="StigGpoManager.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="STIG GPO Manager" Height="860" Width="1320" MinWidth="900" MinHeight="600"
+        Icon="Resources/app.ico" WindowStartupLocation="CenterScreen" FontSize="12">
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="10,3"/>
+            <Setter Property="Margin" Value="0,0,6,0"/>
+            <Setter Property="MinHeight" Value="26"/>
+        </Style>
+        <Style x:Key="PushButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Background" Value="#FFF2D7A6"/>
+        </Style>
+        <Style TargetType="DataGrid">
+            <Setter Property="AutoGenerateColumns" Value="False"/>
+            <Setter Property="CanUserAddRows" Value="False"/>
+            <Setter Property="CanUserDeleteRows" Value="False"/>
+            <Setter Property="HeadersVisibility" Value="Column"/>
+            <Setter Property="GridLinesVisibility" Value="Horizontal"/>
+            <Setter Property="HorizontalGridLinesBrush" Value="#FFDDDDDD"/>
+            <Setter Property="AlternatingRowBackground" Value="#FFF7F7F7"/>
+            <Setter Property="SelectionMode" Value="Extended"/>
+            <Setter Property="Margin" Value="0,4,0,4"/>
+        </Style>
+        <Style x:Key="Heading" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="17"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+        </Style>
+        <Style x:Key="Hint" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#FF555555"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+        </Style>
+        <Style x:Key="Toolbar" TargetType="StackPanel">
+            <Setter Property="Orientation" Value="Horizontal"/>
+            <Setter Property="Margin" Value="0,4,0,4"/>
+        </Style>
+        <Style x:Key="SeverityRow" TargetType="DataGridRow">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Severity}" Value="1"><Setter Property="Background" Value="#FFFFF3CD"/></DataTrigger>
+                <DataTrigger Binding="{Binding Severity}" Value="2"><Setter Property="Background" Value="#FFFFC9C9"/><Setter Property="FontWeight" Value="Bold"/></DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="StatusRow" TargetType="DataGridRow">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Status}" Value="Fail"><Setter Property="Background" Value="#FFFFC9C9"/></DataTrigger>
+                <DataTrigger Binding="{Binding Status}" Value="Warning"><Setter Property="Background" Value="#FFFFF3CD"/></DataTrigger>
+                <DataTrigger Binding="{Binding Status}" Value="Pass"><Setter Property="Background" Value="#FFDFF5DF"/></DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="BackupRow" TargetType="DataGridRow">
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IsUnmatched}" Value="True"><Setter Property="Background" Value="#FFFFC9C9"/></DataTrigger>
+                <DataTrigger Binding="{Binding Skip}" Value="True"><Setter Property="Foreground" Value="#FF777777"/></DataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="DropZone" TargetType="Border">
+            <Setter Property="BorderBrush" Value="#FF6A8BB5"/>
+            <Setter Property="BorderThickness" Value="2"/>
+            <Setter Property="Background" Value="#FFEEF3FA"/>
+            <Setter Property="CornerRadius" Value="4"/>
+            <Setter Property="Padding" Value="12"/>
+            <Setter Property="Margin" Value="0,4,0,6"/>
+            <Setter Property="AllowDrop" Value="True"/>
+        </Style>
+    </Window.Resources>
+
+    <DockPanel>
+        <!-- Header -->
+        <Border DockPanel.Dock="Top" Background="#FF1F4E8C" Padding="10,6">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Left" Text="STIG GPO Manager" Foreground="White" FontSize="18" FontWeight="Bold" VerticalAlignment="Center"/>
+                <TextBlock x:Name="RunText" DockPanel.Dock="Right" Foreground="White" FontWeight="Bold" VerticalAlignment="Center"/>
+                <TextBlock x:Name="HeaderText" Foreground="#FFDCE6F5" Margin="20,0" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+            </DockPanel>
+        </Border>
+
+        <!-- Status bar -->
+        <Border DockPanel.Dock="Bottom" Background="#FFEDEDED" BorderBrush="#FFCCCCCC" BorderThickness="0,1,0,0" Padding="8,3">
+            <DockPanel>
+                <ProgressBar x:Name="Busy" DockPanel.Dock="Right" Width="160" Height="14" IsIndeterminate="False" Visibility="Hidden"/>
+                <TextBlock x:Name="StatusText" Text="Ready" VerticalAlignment="Center"/>
+            </DockPanel>
+        </Border>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="200"/>
+                <ColumnDefinition Width="*"/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="5"/>
+                <RowDefinition Height="170"/>
+            </Grid.RowDefinitions>
+
+            <!-- Step list -->
+            <ListBox x:Name="StepList" Grid.Column="0" Grid.RowSpan="3" BorderThickness="0,0,1,0" Background="#FFF4F6F9"
+                     SelectionChanged="StepList_SelectionChanged" Padding="0,6">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Padding" Value="10,7"/>
+                        <Setter Property="FontSize" Value="13"/>
+                    </Style>
+                </ListBox.ItemContainerStyle>
+                <ListBoxItem Tag="PanelStart">Start / pre-flight</ListBoxItem>
+                <ListBoxItem Tag="PanelLoad">1. Load package</ListBoxItem>
+                <ListBoxItem Tag="PanelStore">2. Central Store</ListBoxItem>
+                <ListBoxItem Tag="PanelImport">3. Import</ListBoxItem>
+                <ListBoxItem Tag="PanelReview">4. Review / diff</ListBoxItem>
+                <ListBoxItem Tag="PanelPilot">5. Pilot</ListBoxItem>
+                <ListBoxItem Tag="PanelScans">   Scan results (gate)</ListBoxItem>
+                <ListBoxItem Tag="PanelPromote">6. Promote</ListBoxItem>
+                <ListBoxItem Tag="PanelRollback">7. Rollback</ListBoxItem>
+                <ListBoxItem Tag="PanelCleanup">8. Cleanup</ListBoxItem>
+                <Separator/>
+                <ListBoxItem Tag="PanelRegister">Exceptions register</ListBoxItem>
+                <ListBoxItem Tag="PanelAudit">Audit log</ListBoxItem>
+            </ListBox>
+
+            <!-- Content panels -->
+            <Grid x:Name="Panels" Grid.Column="1" Grid.Row="0" Margin="12,8,12,4">
+
+                <!-- START -->
+                <DockPanel x:Name="PanelStart">
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Style="{StaticResource Heading}" Text="Start / pre-flight"/>
+                        <StackPanel Style="{StaticResource Toolbar}">
+                            <Button Content="Run pre-flight" Click="Preflight_Click"/>
+                            <CheckBox x:Name="DcDiagCheck" Content="Include dcdiag (SYSVOL / replication)" IsChecked="True" VerticalAlignment="Center" Margin="0,0,12,0"/>
+                            <Button Content="Reload config" Click="ReloadConfig_Click"/>
+                            <Button Content="Open config" Click="OpenConfig_Click"/>
+                            <Button Content="Open working folder" Click="OpenWorking_Click"/>
+                        </StackPanel>
+                        <TextBlock x:Name="ConfigPathText" Style="{StaticResource Hint}"/>
+                    </StackPanel>
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <DataGrid x:Name="PreflightGrid" IsReadOnly="True" RowStyle="{StaticResource StatusRow}">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="70"/>
+                                <DataGridTextColumn Header="Check" Binding="{Binding Name}" Width="220"/>
+                                <DataGridTextColumn Header="Detail" Binding="{Binding Detail}" Width="*">
+                                    <DataGridTextColumn.ElementStyle><Style TargetType="TextBlock"><Setter Property="TextWrapping" Value="Wrap"/></Style></DataGridTextColumn.ElementStyle>
+                                </DataGridTextColumn>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <StackPanel Grid.Row="1" Margin="0,8,0,0">
+                            <TextBlock Text="Runs" FontWeight="Bold" FontSize="14"/>
+                            <TextBlock Style="{StaticResource Hint}" Text="A run holds everything done for one quarterly package, so it can be resumed after the pilot soak. Select a run to resume it, or start a new one on step 1."/>
+                            <StackPanel Style="{StaticResource Toolbar}">
+                                <Button Content="Resume selected run" Click="ResumeRun_Click" Style="{StaticResource PushButton}"/>
+                                <Button Content="New run (step 1)" Click="NewRun_Click"/>
+                                <Button Content="Run report" Click="RunReport_Click"/>
+                                <Button Content="Close selected run" Click="CloseRun_Click"/>
+                                <Button Content="Refresh list" Click="RefreshRuns_Click"/>
+                            </StackPanel>
+                        </StackPanel>
+                        <DataGrid x:Name="RunsGrid" Grid.Row="2" IsReadOnly="True" SelectionMode="Single" MouseDoubleClick="ResumeRun_Click">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Run ID" Binding="{Binding RunId}" Width="170"/>
+                                <DataGridTextColumn Header="Created" Binding="{Binding Created}" Width="140"/>
+                                <DataGridTextColumn Header="By" Binding="{Binding CreatedBy}" Width="140"/>
+                                <DataGridTextColumn Header="Package" Binding="{Binding Package}" Width="*"/>
+                                <DataGridTextColumn Header="GPOs" Binding="{Binding Items}" Width="50"/>
+                                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="260"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+                </DockPanel>
+
+                <!-- 1. LOAD -->
+                <DockPanel x:Name="PanelLoad" Visibility="Collapsed">
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Style="{StaticResource Heading}" Text="1. Load DISA package"/>
+                        <Border x:Name="ZipDrop" Style="{StaticResource DropZone}" Drop="ZipDrop_Drop" DragOver="Drop_DragOver">
+                            <DockPanel>
+                                <Button DockPanel.Dock="Right" Content="Browse..." Click="BrowseZip_Click"/>
+                                <StackPanel>
+                                    <TextBlock Text="Drop the DISA GPO package (.zip) here" FontWeight="Bold"/>
+                                    <TextBlock x:Name="ZipPathText" Text="(no file selected)" Foreground="#FF333333"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+                        <Grid Margin="0,2,0,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Expected SHA-256 (optional): " VerticalAlignment="Center"/>
+                            <TextBox x:Name="ExpectedHashBox" Grid.Column="1" FontFamily="Consolas" VerticalContentAlignment="Center"/>
+                            <Button Grid.Column="2" Content="Load package (new run)" Margin="6,0,0,0" Click="LoadPackage_Click" Style="{StaticResource PushButton}"/>
+                        </Grid>
+                        <TextBlock x:Name="HashText" FontFamily="Consolas" Margin="0,4" TextWrapping="Wrap"/>
+                        <TextBlock Style="{StaticResource Hint}" Text="Red rows match no mapping and are skipped unless you assign one. Edit Version if it could not be detected. Nothing changes in AD in this step."/>
+                    </StackPanel>
+                    <TextBlock DockPanel.Dock="Bottom" x:Name="TemplateSummary" Style="{StaticResource Hint}"/>
+                    <DataGrid x:Name="BackupsGrid" RowStyle="{StaticResource BackupRow}" SelectionMode="Single">
+                        <DataGrid.Columns>
+                            <DataGridCheckBoxColumn Header="Skip" Binding="{Binding Skip, UpdateSourceTrigger=PropertyChanged}" Width="40"/>
+                            <DataGridTextColumn Header="Backup display name" Binding="{Binding DisplayName}" IsReadOnly="True" Width="2*"/>
+                            <DataGridTextColumn Header="Product folder" Binding="{Binding Product}" IsReadOnly="True" Width="*"/>
+                            <DataGridTextColumn Header="Version" Binding="{Binding Version, UpdateSourceTrigger=LostFocus}" Width="60"/>
+                            <DataGridTextColumn Header="Settings" Binding="{Binding Scope}" IsReadOnly="True" Width="95"/>
+                            <DataGridComboBoxColumn x:Name="MappingColumn" Header="Mapping" SelectedItemBinding="{Binding Mapping, UpdateSourceTrigger=PropertyChanged}" Width="1.5*"/>
+                            <DataGridTextColumn Header="New GPO name" Binding="{Binding ProposedName}" IsReadOnly="True" Width="1.5*"/>
+                            <DataGridTextColumn Header="Note" Binding="{Binding Problem}" IsReadOnly="True" Width="1.5*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+
+                <!-- 2. CENTRAL STORE -->
+                <DockPanel x:Name="PanelStore" Visibility="Collapsed">
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Style="{StaticResource Heading}" Text="2. Central Store (PolicyDefinitions)"/>
+                        <TextBlock x:Name="StorePathText" Style="{StaticResource Hint}"/>
+                        <TextBlock Style="{StaticResource Hint}" Text="The store is never downgraded: files where the store copy is newer are skipped unless you tick Override for that file. The whole PolicyDefinitions folder is zipped to WorkingFolder\backups before any copy."/>
+                        <StackPanel Style="{StaticResource Toolbar}">
+                            <Button Content="Compare" Click="CompareStore_Click"/>
+                            <Button Content="Push: update Central Store..." Click="PushStore_Click" Style="{StaticResource PushButton}"/>
+                            <CheckBox x:Name="StoreHideUnchanged" Content="Hide unchanged" IsChecked="True" VerticalAlignment="Center" Checked="StoreFilter_Changed" Unchecked="StoreFilter_Changed"/>
+                        </StackPanel>
+                        <TextBlock x:Name="StoreSummary" FontWeight="Bold"/>
+                    </StackPanel>
+                    <DataGrid x:Name="StoreGrid">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="File" Binding="{Binding File}" IsReadOnly="True" Width="2*"/>
+                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" IsReadOnly="True" Width="1.5*"/>
+                            <DataGridTextColumn Header="Package date" Binding="{Binding PackageDate}" IsReadOnly="True" Width="130"/>
+                            <DataGridTextColumn Header="Store date" Binding="{Binding StoreDate}" IsReadOnly="True" Width="130"/>
+                            <DataGridCheckBoxColumn Header="Override (downgrade)" Binding="{Binding Override, UpdateSourceTrigger=PropertyChanged}" Width="130"/>
+                            <DataGridTextColumn Header="Source" Binding="{Binding Source}" IsReadOnly="True" Width="2*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+
+                <!-- 3. IMPORT -->
+                <DockPanel x:Name="PanelImport" Visibility="Collapsed">
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Style="{StaticResource Heading}" Text="3. Import as new GPOs"/>
+                        <TextBlock Style="{StaticResource Hint}" Text="Backs up every GPO in the domain (Backup-GPO -All), then creates one NEW GPO per selected backup with the templated name. If a GPO with that name exists, the import stops: nothing is ever imported over an existing GPO. No links are created in this step."/>
+                        <StackPanel Style="{StaticResource Toolbar}">
+                            <Button Content="Push: import selected..." Click="PushImport_Click" Style="{StaticResource PushButton}"/>
+                        </StackPanel>
+                        <TextBlock Text="Selected on step 1:" FontWeight="Bold"/>
+                    </StackPanel>
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <DataGrid x:Name="ImportGrid" IsReadOnly="True">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="New GPO name" Binding="{Binding ProposedName}" Width="2*"/>
+                                <DataGridTextColumn Header="From backup" Binding="{Binding DisplayName}" Width="2*"/>
+                                <DataGridTextColumn Header="Version" Binding="{Binding Version}" Width="60"/>
+                                <DataGridTextColumn Header="Settings" Binding="{Binding Scope}" Width="95"/>
+                                <DataGridTextColumn Header="Mapping" Binding="{Binding Mapping}" Width="1.5*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <TextBlock Grid.Row="1" Text="GPOs in this run:" FontWeight="Bold" Margin="0,6,0,0"/>
+                        <DataGrid x:Name="RunItemsGrid" Grid.Row="2" IsReadOnly="True">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="GPO" Binding="{Binding Name}" Width="2*"/>
+                                <DataGridTextColumn Header="GUID" Binding="{Binding Id}" Width="260"/>
+                                <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="80"/>
+                                <DataGridTextColumn Header="Previous version" Binding="{Binding Previous}" Width="2*"/>
+                                <DataGridTextColumn Header="Error" Binding="{Binding Error}" Width="*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+                </DockPanel>
+
+                <!-- 4. REVIEW -->
+                <DockPanel x:Name="PanelReview" Visibility="Collapsed">
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Style="{StaticResource Heading}" Text="4. Review / diff"/>
+                        <TextBlock Style="{StaticResource Hint}" Text="Setting-level diff against the previous version, cross-checked against exception GPOs linked to the same OUs. Red rows: User Rights Assignment / Restricted Groups are REPLACED by the winning GPO, so the exception's list must contain every STIG-required entry."/>
+                        <StackPanel Style="{StaticResource Toolbar}">
+                            <Button Content="Run review" Click="Review_Click" Style="{StaticResource PushButton}"/>
+                            <Button Content="Open HTML report" Click="OpenReviewReport_Click"/>
+                            <Button Content="Open reports folder" Click="OpenReports_Click"/>
+                            <TextBlock Text="  Show: " VerticalAlignment="Center"/>
+                            <ComboBox x:Name="ReviewFilter" Width="170" SelectedIndex="0" SelectionChanged="ReviewFilter_Changed">
+                                <ComboBoxItem>All</ComboBoxItem>
+                                <ComboBoxItem>Needs attention</ComboBoxItem>
+                                <ComboBoxItem>Added</ComboBoxItem>
+                                <ComboBoxItem>Removed</ComboBoxItem>
+                                <ComboBoxItem>Changed</ComboBoxItem>
+                            </ComboBox>
+                            <TextBlock Text="  Search: " VerticalAlignment="Center"/>
+                            <TextBox x:Name="ReviewSearch" Width="220" TextChanged="ReviewFilter_Changed" VerticalContentAlignment="Center"/>
+                        </StackPanel>
+                        <ItemsControl x:Name="ReviewWarnings">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate><TextBlock Text="{Binding}" Foreground="DarkRed" TextWrapping="Wrap" Margin="0,1"/></DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                        <TextBlock x:Name="ReviewSummary" FontWeight="Bold"/>
+                    </StackPanel>
+                    <DataGrid x:Name="ReviewGrid" IsReadOnly="True" RowStyle="{StaticResource SeverityRow}">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="New GPO" Binding="{Binding NewGpo}" Width="1.2*"/>
+                            <DataGridTextColumn Header="Change" Binding="{Binding Change}" Width="70"/>
+                            <DataGridTextColumn Header="Scope" Binding="{Binding Scope}" Width="70"/>
+                            <DataGridTextColumn Header="Setting" Binding="{Binding Setting}" Width="2*"/>
+                            <DataGridTextColumn Header="Old value" Binding="{Binding OldValue}" Width="1.2*"/>
+                            <DataGridTextColumn Header="New value" Binding="{Binding NewValue}" Width="1.2*"/>
+                            <DataGridTextColumn Header="Flag" Binding="{Binding Flag}" Width="1.3*"/>
+                            <DataGridTextColumn Header="Exception GPO" Binding="{Binding ExceptionGpo}" Width="*"/>
+                            <DataGridTextColumn Header="Exception value" Binding="{Binding ExceptionValue}" Width="*"/>
+                            <DataGridTextColumn Header="Detail" Binding="{Binding Detail}" Width="2*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+
+                <!-- 5. PILOT -->
+                <DockPanel x:Name="PanelPilot" Visibility="Collapsed">
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Style="{StaticResource Heading}" Text="5. Pilot"/>
+                        <TextBlock Style="{StaticResource Hint}" Text="Links each new GPO to its PilotTargets (OU-based) or at its ProdTargets with security filtering to the pilot group (group-based). On every OU the new GPO goes directly above the previous DISA version and below all exception GPOs; order is re-read and verified afterwards."/>
+                        <StackPanel Style="{StaticResource Toolbar}">
+                            <Button Content="Push: link pilot..." Click="PushPilot_Click" Style="{StaticResource PushButton}"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <Border DockPanel.Dock="Bottom" Background="#FFEEF3FA" Padding="8" Margin="0,6,0,0">
+                        <StackPanel>
+                            <TextBlock Text="After pilot linking:" FontWeight="Bold"/>
+                            <ItemsControl x:Name="PilotChecklist">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate><CheckBox Content="{Binding}" Margin="0,2"/></DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+                    </Border>
+                    <DataGrid x:Name="PilotGrid" IsReadOnly="False">
+                        <DataGrid.Columns>
+                            <DataGridCheckBoxColumn Header="Include" Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="55"/>
+                            <DataGridTextColumn Header="GPO" Binding="{Binding Name}" IsReadOnly="True" Width="2*"/>
+                            <DataGridTextColumn Header="Pilot mode" Binding="{Binding Mode}" IsReadOnly="True" Width="75"/>
+                            <DataGridTextColumn Header="Pilot targets" Binding="{Binding PilotTargets}" IsReadOnly="True" Width="3*"/>
+                            <DataGridTextColumn Header="Previous version" Binding="{Binding Previous}" IsReadOnly="True" Width="1.5*"/>
+                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" IsReadOnly="True" Width="80"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+
+                <!-- SCANS (phase 2) -->
+                <DockPanel x:Name="PanelScans" Visibility="Collapsed">
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Style="{StaticResource Heading}" Text="Scan results - promotion gate"/>
+                        <TextBlock Style="{StaticResource Hint}" Text="Import SCC / Evaluate-STIG output for pilot machines (CKL, CKLB, XCCDF). Any open finding that is not in the exceptions register blocks Promote. Baseline results (from before the pilot link) are optional and show what changed."/>
+                        <Border Style="{StaticResource DropZone}" Drop="ScanDrop_Drop" DragOver="Drop_DragOver">
+                            <DockPanel>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                    <RadioButton x:Name="StagePilot" Content="Pilot results" IsChecked="True" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <RadioButton x:Name="StageBaseline" Content="Baseline (before pilot)" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                    <Button Content="Browse..." Click="BrowseScan_Click"/>
+                                </StackPanel>
+                                <TextBlock Text="Drop .ckl / .cklb / XCCDF .xml files here" FontWeight="Bold" VerticalAlignment="Center"/>
+                            </DockPanel>
+                        </Border>
+                        <StackPanel Style="{StaticResource Toolbar}">
+                            <Button Content="Evaluate gate" Click="EvaluateGate_Click" Style="{StaticResource PushButton}"/>
+                            <Button Content="Add selected findings to register..." Click="AddToRegister_Click"/>
+                            <Button Content="Remove selected import" Click="RemoveScan_Click"/>
+                        </StackPanel>
+                        <Border x:Name="GateBorder" Padding="8" Margin="0,4" Background="#FFEEEEEE">
+                            <TextBlock x:Name="GateText" FontWeight="Bold" FontSize="14" TextWrapping="Wrap" Text="Gate not evaluated."/>
+                        </Border>
+                    </StackPanel>
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="0.7*"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="0.7*"/>
+                        </Grid.RowDefinitions>
+                        <DataGrid x:Name="ScansGrid" IsReadOnly="True" SelectionMode="Single">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Stage" Binding="{Binding Stage}" Width="70"/>
+                                <DataGridTextColumn Header="File" Binding="{Binding OriginalFileName}" Width="2*"/>
+                                <DataGridTextColumn Header="Format" Binding="{Binding Format}" Width="60"/>
+                                <DataGridTextColumn Header="Hosts" Binding="{Binding HostsText}" Width="2*"/>
+                                <DataGridTextColumn Header="Open" Binding="{Binding OpenCount}" Width="50"/>
+                                <DataGridTextColumn Header="Total" Binding="{Binding TotalCount}" Width="50"/>
+                                <DataGridTextColumn Header="Imported" Binding="{Binding Imported}" Width="130"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <TextBlock Grid.Row="1" Text="Open findings (red = blocking, not in register):" FontWeight="Bold" Margin="0,4,0,0"/>
+                        <DataGrid x:Name="FindingsGrid" Grid.Row="2" IsReadOnly="True" RowStyle="{StaticResource SeverityRow}">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Result" Binding="{Binding Result}" Width="80"/>
+                                <DataGridTextColumn Header="Host" Binding="{Binding Host}" Width="130"/>
+                                <DataGridTextColumn Header="V-ID" Binding="{Binding VulnId}" Width="85"/>
+                                <DataGridTextColumn Header="STIG" Binding="{Binding Stig}" Width="1.5*"/>
+                                <DataGridTextColumn Header="Title" Binding="{Binding Title}" Width="3*"/>
+                                <DataGridTextColumn Header="Exception / POA&amp;M" Binding="{Binding Exception}" Width="1.5*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <TextBlock Grid.Row="3" Text="Baseline vs pilot status changes:" FontWeight="Bold" Margin="0,4,0,0"/>
+                        <DataGrid x:Name="ChangesGrid" Grid.Row="4" IsReadOnly="True">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Host" Binding="{Binding Host}" Width="150"/>
+                                <DataGridTextColumn Header="V-ID" Binding="{Binding VulnId}" Width="100"/>
+                                <DataGridTextColumn Header="Before" Binding="{Binding Before}" Width="120"/>
+                                <DataGridTextColumn Header="After" Binding="{Binding After}" Width="120"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+                </DockPanel>
+
+                <!-- 6. PROMOTE -->
+                <DockPanel x:Name="PanelPromote" Visibility="Collapsed">
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Style="{StaticResource Heading}" Text="6. Promote to production"/>
+                        <TextBlock Style="{StaticResource Hint}" Text="Links each new GPO to every ProdTarget (same ordering rule), then DISABLES (does not remove) the previous version's link on that OU, and removes pilot-only links / filtering. Requires typing PROMOTE."/>
+                        <Border x:Name="PromoteGateBorder" Padding="8" Margin="0,2,0,4" Background="#FFEEEEEE">
+                            <TextBlock x:Name="PromoteGateText" FontWeight="Bold" TextWrapping="Wrap" Text="Pre-checks not evaluated."/>
+                        </Border>
+                        <StackPanel Style="{StaticResource Toolbar}">
+                            <Button Content="Evaluate pre-checks" Click="PromoteChecks_Click"/>
+                            <Button Content="Push: PROMOTE..." Click="PushPromote_Click" Style="{StaticResource PushButton}"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <DataGrid x:Name="PromoteGrid">
+                            <DataGrid.Columns>
+                                <DataGridCheckBoxColumn Header="Include" Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="55"/>
+                                <DataGridTextColumn Header="GPO" Binding="{Binding Name}" IsReadOnly="True" Width="2*"/>
+                                <DataGridTextColumn Header="Production targets" Binding="{Binding ProdTargets}" IsReadOnly="True" Width="3*"/>
+                                <DataGridTextColumn Header="Previous (to disable)" Binding="{Binding Previous}" IsReadOnly="True" Width="1.5*"/>
+                                <DataGridTextColumn Header="Status" Binding="{Binding Status}" IsReadOnly="True" Width="80"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <StackPanel Grid.Row="1" Margin="0,8,0,0">
+                            <TextBlock Text="Policy refresh" FontWeight="Bold" FontSize="14"/>
+                            <TextBlock Style="{StaticResource Hint}" Text="Invoke-GPUpdate -Force -RandomDelayInMinutes 0 on every computer under the production targets. Some settings (user rights, security options, services) need a logoff or reboot to take effect."/>
+                            <StackPanel Style="{StaticResource Toolbar}">
+                                <Button Content="List computers" Click="ListComputers_Click"/>
+                                <Button Content="Push: refresh policy..." Click="PushRefresh_Click" Style="{StaticResource PushButton}"/>
+                            </StackPanel>
+                        </StackPanel>
+                        <DataGrid x:Name="RefreshGrid" Grid.Row="2" IsReadOnly="True">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Computer" Binding="{Binding Computer}" Width="250"/>
+                                <DataGridTextColumn Header="Result" Binding="{Binding Result}" Width="90"/>
+                                <DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="*"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+                </DockPanel>
+
+                <!-- 7. ROLLBACK -->
+                <DockPanel x:Name="PanelRollback" Visibility="Collapsed">
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Style="{StaticResource Heading}" Text="7. Rollback"/>
+                        <TextBlock Style="{StaticResource Hint}" Text="Uses the run's recorded state (not guesswork): re-enables the previous version's links that this run disabled, disables the new version's links, and restores the recorded prior link order on every OU the run touched. Exception GPOs still stay on top."/>
+                        <StackPanel Style="{StaticResource Toolbar}">
+                            <Button Content="Push: roll back selected..." Click="PushRollbackSelected_Click" Style="{StaticResource PushButton}"/>
+                            <Button Content="Push: roll back entire run..." Click="PushRollbackAll_Click" Style="{StaticResource PushButton}"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <DataGrid x:Name="RollbackGrid">
+                        <DataGrid.Columns>
+                            <DataGridCheckBoxColumn Header="Select" Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="55"/>
+                            <DataGridTextColumn Header="GPO" Binding="{Binding Name}" IsReadOnly="True" Width="2*"/>
+                            <DataGridTextColumn Header="Status" Binding="{Binding Status}" IsReadOnly="True" Width="80"/>
+                            <DataGridTextColumn Header="Previous version (to re-enable)" Binding="{Binding Previous}" IsReadOnly="True" Width="2*"/>
+                            <DataGridTextColumn Header="Touched OUs" Binding="{Binding Touched}" IsReadOnly="True" Width="3*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+
+                <!-- 8. CLEANUP -->
+                <DockPanel x:Name="PanelCleanup" Visibility="Collapsed">
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Style="{StaticResource Heading}" Text="8. Cleanup old versions"/>
+                        <TextBlock Style="{StaticResource Hint}" Text="Lists DISA GPOs two or more versions older than the newest of their mapping that have no enabled links (the newest and the one before it are always kept for rollback). Each selected GPO is backed up, then deleted. Requires typing DELETE."/>
+                        <StackPanel Style="{StaticResource Toolbar}">
+                            <Button Content="Find candidates" Click="FindCleanup_Click"/>
+                            <Button Content="Push: DELETE selected..." Click="PushCleanup_Click" Style="{StaticResource PushButton}"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <DataGrid x:Name="CleanupGrid">
+                        <DataGrid.Columns>
+                            <DataGridCheckBoxColumn Header="Delete" Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="55"/>
+                            <DataGridTextColumn Header="GPO" Binding="{Binding Name}" IsReadOnly="True" Width="2*"/>
+                            <DataGridTextColumn Header="Mapping" Binding="{Binding Mapping}" IsReadOnly="True" Width="2*"/>
+                            <DataGridTextColumn Header="Version" Binding="{Binding Version}" IsReadOnly="True" Width="60"/>
+                            <DataGridTextColumn Header="Newest" Binding="{Binding Latest}" IsReadOnly="True" Width="60"/>
+                            <DataGridTextColumn Header="Links" Binding="{Binding Reason}" IsReadOnly="True" Width="1.5*"/>
+                            <DataGridTextColumn Header="Modified" Binding="{Binding Modified}" IsReadOnly="True" Width="130"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+
+                <!-- EXCEPTIONS REGISTER -->
+                <DockPanel x:Name="PanelRegister" Visibility="Collapsed">
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Style="{StaticResource Heading}" Text="Exceptions register"/>
+                        <TextBlock x:Name="RegisterPathText" Style="{StaticResource Hint}"/>
+                        <TextBlock Style="{StaticResource Hint}" Text="Open findings listed here are expected at the promotion gate. Every entry needs a justification; record the POA&amp;M / risk-acceptance reference. Leave STIG empty to match the V-ID in any STIG. Saving keeps a copy of the previous version."/>
+                        <StackPanel Style="{StaticResource Toolbar}">
+                            <Button Content="Add row" Click="RegisterAdd_Click"/>
+                            <Button Content="Delete selected rows" Click="RegisterDelete_Click"/>
+                            <Button Content="Reload" Click="RegisterReload_Click"/>
+                            <Button Content="Save register" Click="RegisterSave_Click" Style="{StaticResource PushButton}"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <DataGrid x:Name="RegisterGrid">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="V-ID" Binding="{Binding VulnId}" Width="90"/>
+                            <DataGridTextColumn Header="STIG / benchmark" Binding="{Binding StigName}" Width="1.5*"/>
+                            <DataGridTextColumn Header="Exception GPO" Binding="{Binding ExceptionGpo}" Width="1.5*"/>
+                            <DataGridTextColumn Header="Justification" Binding="{Binding Justification}" Width="3*"/>
+                            <DataGridTextColumn Header="POA&amp;M / risk acceptance" Binding="{Binding PoamReference}" Width="*"/>
+                            <DataGridTextColumn Header="Date added" Binding="{Binding DateAdded, StringFormat=yyyy-MM-dd}" IsReadOnly="True" Width="85"/>
+                            <DataGridTextColumn Header="Added by" Binding="{Binding AddedBy}" IsReadOnly="True" Width="120"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+
+                <!-- AUDIT -->
+                <DockPanel x:Name="PanelAudit" Visibility="Collapsed">
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock Style="{StaticResource Heading}" Text="Audit log"/>
+                        <TextBlock x:Name="AuditPathText" Style="{StaticResource Hint}"/>
+                        <StackPanel Style="{StaticResource Toolbar}">
+                            <Button Content="Refresh" Click="AuditRefresh_Click"/>
+                            <CheckBox x:Name="AuditCurrentRun" Content="Current run only" VerticalAlignment="Center" Checked="AuditRefresh_Click" Unchecked="AuditRefresh_Click"/>
+                        </StackPanel>
+                    </StackPanel>
+                    <DataGrid x:Name="AuditGrid" IsReadOnly="True">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Time (UTC)" Binding="{Binding Time}" Width="170"/>
+                            <DataGridTextColumn Header="User" Binding="{Binding User}" Width="130"/>
+                            <DataGridTextColumn Header="Run" Binding="{Binding Run}" Width="160"/>
+                            <DataGridTextColumn Header="Action" Binding="{Binding Action}" Width="130"/>
+                            <DataGridTextColumn Header="Target" Binding="{Binding Target}" Width="2*"/>
+                            <DataGridTextColumn Header="Result" Binding="{Binding Result}" Width="80"/>
+                            <DataGridTextColumn Header="Error / detail" Binding="{Binding Error}" Width="2*"/>
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </Grid>
+
+            <GridSplitter Grid.Column="1" Grid.Row="1" HorizontalAlignment="Stretch" Background="#FFDDDDDD"/>
+
+            <!-- Log pane -->
+            <DockPanel Grid.Column="1" Grid.Row="2" Margin="12,2,12,6">
+                <DockPanel DockPanel.Dock="Top">
+                    <Button DockPanel.Dock="Right" Content="Clear" Click="ClearLog_Click" Padding="6,0" MinHeight="20"/>
+                    <CheckBox x:Name="ShowCommands" DockPanel.Dock="Right" Content="Show cmdlets" IsChecked="True" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                    <TextBlock Text="Log" FontWeight="Bold"/>
+                </DockPanel>
+                <ListBox x:Name="LogList" FontFamily="Consolas" FontSize="11" VirtualizingPanel.IsVirtualizing="True">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate><TextBlock Text="{Binding Text}" Foreground="{Binding Brush}" TextWrapping="NoWrap"/></DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Grid>
+    </DockPanel>
+</Window>
