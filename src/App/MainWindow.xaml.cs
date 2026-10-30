@@ -1064,6 +1064,7 @@ namespace StigGpoManager
             {
                 Directory.CreateDirectory(folder);
                 Width = 1400; Height = 880;
+                foreach (var g in FindChildren<DataGrid>(this)) { g.EnableRowVirtualization = false; g.EnableColumnVirtualization = false; }
                 await WaitIdle(requireRun: true);
                 ShowCommands.IsChecked = false;
 
@@ -1114,6 +1115,15 @@ namespace StigGpoManager
             {
                 File.WriteAllText(Path.Combine(folder, "error.txt"), ex.ToString());
                 return 1;
+            }
+        }
+
+        private static IEnumerable<T> FindChildren<T>(DependencyObject root) where T : DependencyObject
+        {
+            foreach (var child in LogicalTreeHelper.GetChildren(root).OfType<DependencyObject>())
+            {
+                if (child is T t) yield return t;
+                foreach (var c in FindChildren<T>(child)) yield return c;
             }
         }
 

@@ -371,7 +371,11 @@ namespace StigGpoManager.Core
         public List<string> RefreshTargets(RunState run, IEnumerable<RunItem> items = null)
         {
             var computers = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var t in (items ?? run.Items.Where(i => i.Status == ItemStatus.Promoted)).SelectMany(i => i.ProdTargets).Distinct(StringComparer.OrdinalIgnoreCase))
+            // After promote: the promoted GPOs' production OUs. Before promote: preview all of this run's production OUs.
+            var source = items ?? (run.Items.Any(i => i.Status == ItemStatus.Promoted)
+                ? run.Items.Where(i => i.Status == ItemStatus.Promoted)
+                : run.Items.Where(i => i.NewGpoId != null));
+            foreach (var t in source.SelectMany(i => i.ProdTargets).Distinct(StringComparer.OrdinalIgnoreCase))
                 foreach (var c in Directory.GetComputersUnder(t)) computers.Add(c);
             return computers.ToList();
         }
