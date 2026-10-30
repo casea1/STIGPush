@@ -299,8 +299,14 @@ namespace StigGpoManager
                 s.State = st;
                 s.Caption = cap;
             }
-            var next = _steps.FirstOrDefault(s => s.IsMain && s.State != StepState.Done);
-            if (next != null && next.State == StepState.Pending) { next.State = StepState.Next; if (string.IsNullOrEmpty(next.Caption)) next.Caption = "Next"; }
+            // Steps before the furthest completed one that were never done are shown as skipped;
+            // "next" is the first open step after the furthest completed step.
+            var mains = _steps.Where(x => x.IsMain).ToList();
+            int lastDone = mains.FindLastIndex(x => x.State == StepState.Done || x.State == StepState.Attention);
+            for (int i = 0; i < lastDone; i++)
+                if (mains[i].State == StepState.Pending) { mains[i].State = StepState.Skipped; mains[i].Caption = "Skipped"; }
+            var next = mains.Skip(lastDone + 1).FirstOrDefault(x => x.State == StepState.Pending);
+            if (next != null) { next.State = StepState.Next; if (string.IsNullOrEmpty(next.Caption)) next.Caption = "Next"; }
             UpdateFooter();
         }
 
@@ -326,6 +332,7 @@ namespace StigGpoManager
             }
             else if (done) { StepStateBadge.Background = (Brush)FindResource("SuccessSoft"); StepStateText.Text = "✓ Done"; }
             else if (_shown.State == StepState.Attention) { StepStateBadge.Background = (Brush)FindResource("WarnSoft"); StepStateText.Text = "! Needs attention"; }
+            else if (_shown.State == StepState.Skipped) { StepStateBadge.Background = (Brush)FindResource("AccentSoft"); StepStateText.Text = "Skipped"; }
             else { StepStateBadge.Background = (Brush)FindResource("WarnSoft"); StepStateText.Text = "Not done yet"; }
             StepStateDetail.Text = _shown.Caption;
 
@@ -1137,7 +1144,12 @@ namespace StigGpoManager
         {
             window.UpdateLayout();
             var root = (FrameworkElement)window.Content;
-            int w = (int)Math.Ceiling(root.ActualWidth), h = (int)Math.Ceiling(root.ActualHeight);
+            // Lay the content out at a fixed size so screenshots do not depend on the build machine's screen.
+            bool main = window is MainWindow;
+            int w = main ? 1440 : (int)Math.Max(window.Width, root.ActualWidth), h = main ? 920 : (int)Math.Max(window.Height - 40, root.ActualHeight);
+            root.Measure(new Size(w, h));
+            root.Arrange(new Rect(0, 0, w, h));
+            root.UpdateLayout();
             var visual = new DrawingVisual();
             using (var dc = visual.RenderOpen())
             {
@@ -1149,6 +1161,8 @@ namespace StigGpoManager
             var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
             enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bmp));
             using (var fs = File.Create(path)) enc.Save(fs);
+            root.InvalidateMeasure();
+            window.UpdateLayout();
         }
     }
 }

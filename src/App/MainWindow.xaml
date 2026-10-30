@@ -68,7 +68,7 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="6"/>
-                <RowDefinition Height="150"/>
+                <RowDefinition Height="130" MinHeight="70"/>
             </Grid.RowDefinitions>
 
             <!-- Step list: each step shows its status (done / next / needs attention) -->
@@ -122,9 +122,9 @@
 
             <!-- Step header (what / you / next), content card, and footer with the Next button -->
             <DockPanel Grid.Column="1" Grid.Row="0" Margin="16,14,16,4">
-                <Border DockPanel.Dock="Top" Style="{StaticResource CardBorder}" Margin="0,0,0,10">
+                <Border DockPanel.Dock="Top" Style="{StaticResource CardBorder}" Margin="0,0,0,8" Padding="14,10">
                     <StackPanel>
-                        <TextBlock x:Name="StepTitle" Style="{StaticResource Heading}" Text="Start"/>
+                        <TextBlock x:Name="StepTitle" Style="{StaticResource Heading}" Text="Start" FontSize="18" Margin="0,0,0,2"/>
                         <Grid Margin="0,4,0,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
@@ -177,7 +177,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
-                        <DataGrid x:Name="PreflightGrid" IsReadOnly="True" RowStyle="{StaticResource StatusRow}">
+                        <DataGrid x:Name="PreflightGrid" MinHeight="110" IsReadOnly="True" RowStyle="{StaticResource StatusRow}">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="70"/>
                                 <DataGridTextColumn Header="Check" Binding="{Binding Name}" Width="220"/>
@@ -196,7 +196,7 @@
                                 <Button Content="Refresh list" Click="RefreshRuns_Click"/>
                             </StackPanel>
                         </StackPanel>
-                        <DataGrid x:Name="RunsGrid" Grid.Row="2" IsReadOnly="True" SelectionMode="Single" MouseDoubleClick="ResumeRun_Click">
+                        <DataGrid x:Name="RunsGrid" MinHeight="110" Grid.Row="2" IsReadOnly="True" SelectionMode="Single" MouseDoubleClick="ResumeRun_Click">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="Run ID" Binding="{Binding RunId}" Width="170"/>
                                 <DataGridTextColumn Header="Created" Binding="{Binding Created}" Width="140"/>
@@ -238,7 +238,7 @@
                         <Button Content="Use suggested mappings for red rows" Click="UseSuggestions_Click" ToolTip="For backups no mapping matched, assign the mapping whose name is most similar (shown in the Note column). Check the result before importing."/>
                         <Button Content="Edit mappings in setup wizard..." Click="Setup_Click"/>
                     </StackPanel>
-                    <DataGrid x:Name="BackupsGrid" RowStyle="{StaticResource BackupRow}" SelectionMode="Single">
+                    <DataGrid x:Name="BackupsGrid" MinHeight="110" RowStyle="{StaticResource BackupRow}" SelectionMode="Single">
                         <DataGrid.Columns>
                             <DataGridCheckBoxColumn Header="Skip" Binding="{Binding Skip, UpdateSourceTrigger=PropertyChanged}" Width="40"/>
                             <DataGridTextColumn Header="Backup display name" Binding="{Binding DisplayName}" IsReadOnly="True" Width="2*"/>
@@ -263,7 +263,7 @@
                         </StackPanel>
                         <TextBlock x:Name="StoreSummary" FontWeight="Bold"/>
                     </StackPanel>
-                    <DataGrid x:Name="StoreGrid">
+                    <DataGrid x:Name="StoreGrid" MinHeight="110">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="File" Binding="{Binding File}" IsReadOnly="True" Width="2*"/>
                             <DataGridTextColumn Header="Status" Binding="{Binding Status}" IsReadOnly="True" Width="1.5*"/>
@@ -289,7 +289,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
-                        <DataGrid x:Name="ImportGrid" IsReadOnly="True">
+                        <DataGrid x:Name="ImportGrid" MinHeight="110" IsReadOnly="True">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="New GPO name" Binding="{Binding ProposedName}" Width="2*"/>
                                 <DataGridTextColumn Header="From backup" Binding="{Binding DisplayName}" Width="2*"/>
@@ -299,7 +299,7 @@
                             </DataGrid.Columns>
                         </DataGrid>
                         <TextBlock Grid.Row="1" Text="GPOs in this run:" FontWeight="Bold" Margin="0,6,0,0"/>
-                        <DataGrid x:Name="RunItemsGrid" Grid.Row="2" IsReadOnly="True">
+                        <DataGrid x:Name="RunItemsGrid" MinHeight="110" Grid.Row="2" IsReadOnly="True">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="GPO" Binding="{Binding Name}" Width="2*"/>
                                 <DataGridTextColumn Header="GUID" Binding="{Binding Id}" Width="260"/>
@@ -336,7 +336,7 @@
                         </ItemsControl>
                         <TextBlock x:Name="ReviewSummary" FontWeight="Bold"/>
                     </StackPanel>
-                    <DataGrid x:Name="ReviewGrid" IsReadOnly="True" RowStyle="{StaticResource SeverityRow}">
+                    <DataGrid x:Name="ReviewGrid" MinHeight="110" IsReadOnly="True" RowStyle="{StaticResource SeverityRow}">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="New GPO" Binding="{Binding NewGpo}" Width="1.2*"/>
                             <DataGridTextColumn Header="Change" Binding="{Binding Change}" Width="70"/>
@@ -369,7 +369,7 @@
                             </ItemsControl>
                         </StackPanel>
                     </Border>
-                    <DataGrid x:Name="PilotGrid" IsReadOnly="False">
+                    <DataGrid x:Name="PilotGrid" MinHeight="110" IsReadOnly="False">
                         <DataGrid.Columns>
                             <DataGridCheckBoxColumn Header="Include" Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="55"/>
                             <DataGridTextColumn Header="GPO" Binding="{Binding Name}" IsReadOnly="True" Width="2*"/>
@@ -411,7 +411,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="0.7*"/>
                         </Grid.RowDefinitions>
-                        <DataGrid x:Name="ScansGrid" IsReadOnly="True" SelectionMode="Single">
+                        <DataGrid x:Name="ScansGrid" MinHeight="110" IsReadOnly="True" SelectionMode="Single">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="Stage" Binding="{Binding Stage}" Width="70"/>
                                 <DataGridTextColumn Header="File" Binding="{Binding OriginalFileName}" Width="2*"/>
@@ -423,7 +423,7 @@
                             </DataGrid.Columns>
                         </DataGrid>
                         <TextBlock Grid.Row="1" Text="Open findings (red = blocking, not in register):" FontWeight="Bold" Margin="0,4,0,0"/>
-                        <DataGrid x:Name="FindingsGrid" Grid.Row="2" IsReadOnly="True" RowStyle="{StaticResource SeverityRow}">
+                        <DataGrid x:Name="FindingsGrid" MinHeight="110" Grid.Row="2" IsReadOnly="True" RowStyle="{StaticResource SeverityRow}">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="Result" Binding="{Binding Result}" Width="80"/>
                                 <DataGridTextColumn Header="Host" Binding="{Binding Host}" Width="130"/>
@@ -434,7 +434,7 @@
                             </DataGrid.Columns>
                         </DataGrid>
                         <TextBlock Grid.Row="3" Text="Baseline vs pilot status changes:" FontWeight="Bold" Margin="0,4,0,0"/>
-                        <DataGrid x:Name="ChangesGrid" Grid.Row="4" IsReadOnly="True">
+                        <DataGrid x:Name="ChangesGrid" MinHeight="110" Grid.Row="4" IsReadOnly="True">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="Host" Binding="{Binding Host}" Width="150"/>
                                 <DataGridTextColumn Header="V-ID" Binding="{Binding VulnId}" Width="100"/>
@@ -462,7 +462,7 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
-                        <DataGrid x:Name="PromoteGrid">
+                        <DataGrid x:Name="PromoteGrid" MinHeight="110">
                             <DataGrid.Columns>
                                 <DataGridCheckBoxColumn Header="Include" Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="55"/>
                                 <DataGridTextColumn Header="GPO" Binding="{Binding Name}" IsReadOnly="True" Width="2*"/>
@@ -478,7 +478,7 @@
                                 <Button Content="Push: refresh policy..." Click="PushRefresh_Click" Style="{StaticResource PushButton}"/>
                             </StackPanel>
                         </StackPanel>
-                        <DataGrid x:Name="RefreshGrid" Grid.Row="2" IsReadOnly="True">
+                        <DataGrid x:Name="RefreshGrid" MinHeight="110" Grid.Row="2" IsReadOnly="True">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="Computer" Binding="{Binding Computer}" Width="250"/>
                                 <DataGridTextColumn Header="Result" Binding="{Binding Result}" Width="90"/>
@@ -496,7 +496,7 @@
                             <Button Content="Push: roll back entire run..." Click="PushRollbackAll_Click" Style="{StaticResource PushButton}"/>
                         </StackPanel>
                     </StackPanel>
-                    <DataGrid x:Name="RollbackGrid">
+                    <DataGrid x:Name="RollbackGrid" MinHeight="110">
                         <DataGrid.Columns>
                             <DataGridCheckBoxColumn Header="Select" Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="55"/>
                             <DataGridTextColumn Header="GPO" Binding="{Binding Name}" IsReadOnly="True" Width="2*"/>
@@ -515,7 +515,7 @@
                             <Button Content="Push: DELETE selected..." Click="PushCleanup_Click" Style="{StaticResource PushButton}"/>
                         </StackPanel>
                     </StackPanel>
-                    <DataGrid x:Name="CleanupGrid">
+                    <DataGrid x:Name="CleanupGrid" MinHeight="110">
                         <DataGrid.Columns>
                             <DataGridCheckBoxColumn Header="Delete" Binding="{Binding Selected, UpdateSourceTrigger=PropertyChanged}" Width="55"/>
                             <DataGridTextColumn Header="GPO" Binding="{Binding Name}" IsReadOnly="True" Width="2*"/>
@@ -539,7 +539,7 @@
                             <Button Content="Save register" Click="RegisterSave_Click" Style="{StaticResource PushButton}"/>
                         </StackPanel>
                     </StackPanel>
-                    <DataGrid x:Name="RegisterGrid">
+                    <DataGrid x:Name="RegisterGrid" MinHeight="110">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="V-ID" Binding="{Binding VulnId}" Width="90"/>
                             <DataGridTextColumn Header="STIG / benchmark" Binding="{Binding StigName}" Width="1.5*"/>
@@ -561,7 +561,7 @@
                             <CheckBox x:Name="AuditCurrentRun" Content="Current run only" VerticalAlignment="Center" Checked="AuditRefresh_Click" Unchecked="AuditRefresh_Click"/>
                         </StackPanel>
                     </StackPanel>
-                    <DataGrid x:Name="AuditGrid" IsReadOnly="True">
+                    <DataGrid x:Name="AuditGrid" MinHeight="110" IsReadOnly="True">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="Time (UTC)" Binding="{Binding Time}" Width="170"/>
                             <DataGridTextColumn Header="User" Binding="{Binding User}" Width="130"/>

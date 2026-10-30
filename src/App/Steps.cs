@@ -3,7 +3,7 @@ using System.Windows.Media;
 
 namespace StigGpoManager
 {
-    public enum StepState { Pending, Next, Done, Attention, Optional, Tool }
+    public enum StepState { Pending, Next, Done, Attention, Optional, Tool, Skipped }
 
     /// <summary>One entry in the left step list, with a status badge (done / next / attention).</summary>
     public sealed class StepItem : Row
@@ -51,6 +51,7 @@ namespace StigGpoManager
             _state == StepState.Done ? B(0xFF16A34A) : _state == StepState.Next ? B(0xFF2563EB) : _state == StepState.Attention ? B(0xFFD97706) : B(0xFFCBD2DB);
         public Brush BadgeForeground =>
             _state == StepState.Done || _state == StepState.Next || _state == StepState.Attention ? Brushes.White : B(0xFF6B7280);
+        public Brush SkippedBrush => B(0xFF9CA3AF);
         public Brush CaptionBrush =>
             _state == StepState.Attention ? B(0xFFB45309) : _state == StepState.Next ? B(0xFF2563EB) : _state == StepState.Done ? B(0xFF15803D) : B(0xFF6B7280);
     }
