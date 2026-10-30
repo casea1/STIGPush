@@ -126,7 +126,7 @@ namespace StigGpoManager
                     dc.DrawRoundedRectangle(brush, null, new Rect(x0, barY, x1 - x0, BarHeight), 4, 4);
                     var lab = Text(s.Label, 10.5, Brushes.White, true);
                     if (lab.Width + 10 < x1 - x0) dc.DrawText(lab, new Point(x0 + 6, barY + 1));
-                    else if (s.Open && s == row.Segments.Last(x => x.Kind != SegmentKind.RolledBack))
+                    else if (s.Open && s.Kind == SegmentKind.Production) // a pilot row already has its "soak ends" label there
                     {
                         // Too short for its label (e.g. promoted today): say it beside the bar, clear of the today line.
                         var outside = Text(s.Label + " since " + s.Start.ToString("d MMM", CultureInfo.CurrentUICulture), 10.5, brush == ProdBrush ? ProdBrush : Muted, true);
