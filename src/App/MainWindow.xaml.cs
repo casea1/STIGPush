@@ -226,7 +226,11 @@ namespace StigGpoManager
             StepTitle.Text = (string.IsNullOrEmpty(item.Number) || item.Number == "0" ? "" : item.Number + ". ") + item.Title;
             GuideWhat.Text = item.What;
             GuideDo.Text = item.Do;
-            GuideChanges.Text = item.Changes;
+            bool changesAd = !item.Changes.StartsWith("None");
+            GuideChanges.Text = changesAd ? "Changes: " + item.Changes : "";
+            GuideChanges.Visibility = changesAd ? Visibility.Visible : Visibility.Collapsed;
+            ChangesPillText.Text = changesAd ? "Changes AD (asks first)" : "No AD changes";
+            ChangesPill.Background = (Brush)FindResource(changesAd ? "WarnSoft" : "SuccessSoft");
             if (item.Panel == "PanelAudit") LoadAudit();
             if (item.Panel == "PanelRegister") LoadRegister();
             UpdateFooter();
@@ -1144,20 +1148,16 @@ namespace StigGpoManager
         {
             window.UpdateLayout();
             var root = (FrameworkElement)window.Content;
-            // Lay the content out at a fixed size so screenshots do not depend on the build machine's screen.
+            // Lay the content out at a fixed size (independent of the build machine's small screen) and
+            // render that layout directly, so nothing is stretched.
             bool main = window is MainWindow;
-            int w = main ? 1440 : (int)Math.Max(window.Width, root.ActualWidth), h = main ? 920 : (int)Math.Max(window.Height - 40, root.ActualHeight);
-            root.Measure(new Size(w, h));
-            root.Arrange(new Rect(0, 0, w, h));
-            root.UpdateLayout();
-            var visual = new DrawingVisual();
-            using (var dc = visual.RenderOpen())
-            {
-                dc.DrawRectangle(SystemColors.WindowBrush, null, new Rect(0, 0, w, h));
-                dc.DrawRectangle(new VisualBrush(root), null, new Rect(0, 0, w, h));
-            }
+            int w = main ? 1440 : (int)Math.Ceiling(root.ActualWidth), h = main ? 920 : (int)Math.Ceiling(root.ActualHeight);
+            if (main) { root.Measure(new Size(w, h)); root.Arrange(new Rect(0, 0, w, h)); }
             var bmp = new System.Windows.Media.Imaging.RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
-            bmp.Render(visual);
+            var bg = new DrawingVisual();
+            using (var dc = bg.RenderOpen()) dc.DrawRectangle(window.Background ?? Brushes.White, null, new Rect(0, 0, w, h));
+            bmp.Render(bg);
+            bmp.Render(root);
             var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
             enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bmp));
             using (var fs = File.Create(path)) enc.Save(fs);

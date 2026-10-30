@@ -124,26 +124,15 @@
             <DockPanel Grid.Column="1" Grid.Row="0" Margin="16,14,16,4">
                 <Border DockPanel.Dock="Top" Style="{StaticResource CardBorder}" Margin="0,0,0,8" Padding="14,10">
                     <StackPanel>
-                        <TextBlock x:Name="StepTitle" Style="{StaticResource Heading}" Text="Start" FontSize="18" Margin="0,0,0,2"/>
-                        <Grid Margin="0,4,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0">
-                                <TextBlock Style="{StaticResource GuideTitle}" Text="WHAT THIS STEP DOES"/>
-                                <TextBlock x:Name="GuideWhat" Style="{StaticResource GuideText}"/>
-                            </StackPanel>
-                            <StackPanel Grid.Column="1">
-                                <TextBlock Style="{StaticResource GuideTitle}" Text="WHAT YOU DO"/>
-                                <TextBlock x:Name="GuideDo" Style="{StaticResource GuideText}"/>
-                            </StackPanel>
-                            <StackPanel Grid.Column="2">
-                                <TextBlock Style="{StaticResource GuideTitle}" Text="CHANGES TO ACTIVE DIRECTORY"/>
-                                <TextBlock x:Name="GuideChanges" Style="{StaticResource GuideText}"/>
-                            </StackPanel>
-                        </Grid>
+                        <DockPanel>
+                            <Border x:Name="ChangesPill" DockPanel.Dock="Right" CornerRadius="10" Padding="10,3" VerticalAlignment="Center" Background="{StaticResource SuccessSoft}">
+                                <TextBlock x:Name="ChangesPillText" FontSize="12" FontWeight="SemiBold" Text="No AD changes"/>
+                            </Border>
+                            <TextBlock x:Name="StepTitle" Style="{StaticResource Heading}" Text="Start" FontSize="18" Margin="0"/>
+                        </DockPanel>
+                        <TextBlock x:Name="GuideWhat" Foreground="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+                        <TextBlock TextWrapping="Wrap" Margin="0,4,0,0"><Run Text="&#x2192; " Foreground="{StaticResource Accent}" FontWeight="Bold"/><Run x:Name="GuideDo" FontWeight="SemiBold"/></TextBlock>
+                        <TextBlock x:Name="GuideChanges" Foreground="{StaticResource Muted}" FontSize="12" TextWrapping="Wrap" Margin="0,4,0,0"/>
                     </StackPanel>
                 </Border>
                 <Border DockPanel.Dock="Bottom" x:Name="StepFooter" Style="{StaticResource CardBorder}" Padding="12,8" Margin="0,10,0,0">
@@ -329,11 +318,13 @@
                             <TextBlock Text="  Search: " VerticalAlignment="Center"/>
                             <TextBox x:Name="ReviewSearch" Width="220" TextChanged="ReviewFilter_Changed" VerticalContentAlignment="Center"/>
                         </StackPanel>
+                        <ScrollViewer MaxHeight="64" VerticalScrollBarVisibility="Auto">
                         <ItemsControl x:Name="ReviewWarnings">
                             <ItemsControl.ItemTemplate>
-                                <DataTemplate><TextBlock Text="{Binding}" Foreground="DarkRed" TextWrapping="Wrap" Margin="0,1"/></DataTemplate>
+                                <DataTemplate><TextBlock Text="{Binding}" Foreground="{StaticResource Danger}" TextWrapping="Wrap" Margin="0,1"/></DataTemplate>
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
+                        </ScrollViewer>
                         <TextBlock x:Name="ReviewSummary" FontWeight="Bold"/>
                     </StackPanel>
                     <DataGrid x:Name="ReviewGrid" MinHeight="110" IsReadOnly="True" RowStyle="{StaticResource SeverityRow}">
