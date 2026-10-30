@@ -14,6 +14,8 @@ namespace StigGpoManager
     ///   /install [/quiet]   install to Program Files, Programs and Features, Start menu, tray at logon
     ///   /uninstall [/quiet]
     ///   /config &lt;path&gt;   use a specific config.json
+    ///   /demo            simulated domain with sample data (no AD access) - training / evaluation
+    ///   /screenshots &lt;dir&gt;  /demo, save a PNG of every screen to dir, then exit (used by CI for the README)
     ///   cli &lt;command&gt; ...  scriptable command line (see README), run from an elevated console
     /// </summary>
     public static class Program
@@ -63,9 +65,12 @@ namespace StigGpoManager
             }
 
             bool trayMode = Has("/tray");
-            using (var mutex = new Mutex(true, MutexName, out bool first))
+            string screenshots = ArgValue(args, "/screenshots");
+            bool demo = Has("/demo") || screenshots != null;
+            if (demo) trayMode = false;
+            using (var mutex = new Mutex(true, demo ? MutexName + ".Demo" : MutexName, out bool first))
             {
-                if (!first)
+                if (!first && !demo)
                 {
                     // Already running (e.g. tray at logon): ask that instance to show its window.
                     if (!trayMode)
@@ -73,7 +78,7 @@ namespace StigGpoManager
                     return 0;
                 }
 
-                if (!trayMode && !Installer.IsInstalled && !quiet)
+                if (!trayMode && !demo && !Installer.IsInstalled && !quiet)
                 {
                     var answer = MessageBox.Show(
                         "STIG GPO Manager is not installed on this computer.\n\nInstall it now? This adds it to Programs and Features and the Start menu, and shows the tray icon at logon.\n\nChoose No to run it once without installing.",
@@ -92,7 +97,7 @@ namespace StigGpoManager
                     }
                 }
 
-                var app = new App(trayMode, ResolveConfigPath(configPath));
+                var app = new App(trayMode, ResolveConfigPath(configPath), demo, screenshots == null ? null : Path.GetFullPath(screenshots));
                 return app.Run();
             }
         }
@@ -119,16 +124,22 @@ namespace StigGpoManager
     public sealed class App : Application
     {
         private readonly bool _trayMode;
-        private readonly string _configPath;
+        private readonly bool _demo;
+        private readonly string _screenshotDir;
+        private string _configPath;
+        private Session _demoSession;
+        private int _exitCode;
         private TrayIcon _tray;
         private MainWindow _window;
         private EventWaitHandle _showEvent;
         private RegisteredWaitHandle _wait;
 
-        public App(bool trayMode, string configPath)
+        public App(bool trayMode, string configPath, bool demo = false, string screenshotDir = null)
         {
             _trayMode = trayMode;
             _configPath = configPath;
+            _demo = demo;
+            _screenshotDir = screenshotDir;
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
         }
 
@@ -137,10 +148,26 @@ namespace StigGpoManager
             base.OnStartup(e);
             DispatcherUnhandledException += (s, ex) =>
             {
+                if (_screenshotDir != null) { Console.Error.WriteLine(ex.Exception); Shutdown(1); ex.Handled = true; return; }
                 MessageBox.Show(ex.Exception.ToString(), "STIG GPO Manager - unexpected error", MessageBoxButton.OK, MessageBoxImage.Error);
                 ex.Handled = true;
             };
-            _tray = new TrayIcon(_configPath, ShowMain, ExitApp);
+            if (_demo)
+            {
+                try
+                {
+                    _demoSession = DemoData.Create();
+                    _configPath = _demoSession.ConfigPath;
+                }
+                catch (Exception ex)
+                {
+                    if (_screenshotDir == null) MessageBox.Show(ex.ToString(), "STIG GPO Manager - demo", MessageBoxButton.OK, MessageBoxImage.Error);
+                    else File.WriteAllText(Path.Combine(Directory.CreateDirectory(_screenshotDir).FullName, "error.txt"), ex.ToString());
+                    Shutdown(1);
+                    return;
+                }
+            }
+            if (_screenshotDir == null) _tray = new TrayIcon(_configPath, ShowMain, ExitApp);
             _showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, Program.ShowEventName);
             _wait = ThreadPool.RegisterWaitForSingleObject(_showEvent, (o, t) => Dispatcher.BeginInvoke(new Action(ShowMain)), null, -1, false);
             if (!_trayMode) ShowMain();
@@ -150,18 +177,20 @@ namespace StigGpoManager
         {
             if (_window == null)
             {
-                _window = new MainWindow(_configPath);
+                _window = new MainWindow(_demoSession ?? new Session(_configPath));
+                if (_screenshotDir != null)
+                    _window.Loaded += async (s, e) => { _exitCode = await _window.RunScreenshotTour(_screenshotDir); ExitApp(); };
                 _window.Closing += (s, e) =>
                 {
                     if (_trayMode && !_window.ExitRequested)
                     {
                         e.Cancel = true;
                         _window.Hide();
-                        _tray.Refresh();
+                        _tray?.Refresh();
                     }
                 };
                 _window.Closed += (s, e) => { _window = null; if (!_trayMode) ExitApp(); };
-                _window.RunChanged += () => _tray.Refresh();
+                _window.RunChanged += () => _tray?.Refresh();
             }
             _window.Show();
             if (_window.WindowState == WindowState.Minimized) _window.WindowState = WindowState.Normal;
@@ -177,7 +206,7 @@ namespace StigGpoManager
             _wait?.Unregister(null);
             _showEvent?.Dispose();
             _tray?.Dispose();
-            Shutdown();
+            Shutdown(_exitCode);
         }
     }
 }

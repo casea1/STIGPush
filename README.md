@@ -65,6 +65,12 @@ certificate if you have one. `build.ps1` writes the exe's SHA-256 for the transf
 3. Edit `C:\ProgramData\StigGpoManager\config.json` for this domain (see below), then open the tool
    from the Start menu or the tray icon. The Start page runs the pre-flight checks.
 
+**Demo mode:** `StigGpoManager.exe /demo` opens the full GUI against a simulated domain with a sample
+quarterly run already in pilot (package, diff, exception findings, scan results, gate). It makes no
+AD or SYSVOL access and writes only to `%TEMP%\StigGpoManager-demo`. Use it for training or to try
+the tool without a lab. `/screenshots <folder>` runs the demo, saves a PNG of every screen and exits;
+CI uses it to produce the screenshots below.
+
 `/install /quiet` and `/uninstall /quiet` skip the message boxes. Uninstall removes the program,
 shortcut, scheduled task and Programs-and-Features entry. It **keeps** the config and the whole
 `WorkingFolder` (runs, backups, reports, audit log), because those are audit evidence.

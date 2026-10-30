@@ -70,7 +70,7 @@
 
     <DockPanel>
         <!-- Header -->
-        <Border DockPanel.Dock="Top" Background="#FF1F4E8C" Padding="10,6">
+        <Border x:Name="HeaderBorder" DockPanel.Dock="Top" Background="#FF1F4E8C" Padding="10,6">
             <DockPanel>
                 <TextBlock DockPanel.Dock="Left" Text="STIG GPO Manager" Foreground="White" FontSize="18" FontWeight="Bold" VerticalAlignment="Center"/>
                 <TextBlock x:Name="RunText" DockPanel.Dock="Right" Foreground="White" FontWeight="Bold" VerticalAlignment="Center"/>

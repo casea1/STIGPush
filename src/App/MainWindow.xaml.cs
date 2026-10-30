@@ -35,10 +35,16 @@ namespace StigGpoManager
 
         private StigEngine Engine => _session.Engine;
 
-        public MainWindow(string configPath)
+        public MainWindow(Session session)
         {
             InitializeComponent();
-            _session = new Session(configPath);
+            _session = session;
+            if (session.IsDemo)
+            {
+                Title = "STIG GPO Manager - DEMO (simulated domain, no AD changes)";
+                HeaderBorder.Background = new SolidColorBrush(Color.FromRgb(0x8A, 0x4B, 0x08));
+                session.Engine.Log += AddLog;
+            }
             LogList.ItemsSource = _log;
             PilotChecklist.ItemsSource = StigEngine.PilotChecklist;
             RegisterGrid.ItemsSource = _register;
@@ -168,6 +174,22 @@ namespace StigGpoManager
 
         private void Connect()
         {
+            if (_session.IsDemo && _session.Config != null)
+            {
+                MappingColumn.ItemsSource = _session.Config.Mappings;
+                StorePathText.Text = "Central Store: " + _session.Config.EffectiveCentralStorePath;
+                RegisterPathText.Text = "Register file: " + _session.Config.ExceptionsRegisterPath;
+                AuditPathText.Text = "Append-only log: " + _session.Config.AuditLogPath;
+                ConfigPathText.Text = "Config: " + _session.ConfigPath + "   (DEMO: simulated domain, nothing touches Active Directory)";
+                AddLog(LogLevel.Warning, "DEMO MODE: simulated domain " + _session.Config.Domain + "; no Active Directory or SYSVOL access.");
+                RunOp("Running pre-flight checks (demo)", () => _session.Preflight(false), results =>
+                {
+                    PreflightGrid.ItemsSource = results;
+                    UpdateHeader();
+                    RefreshRuns(autoResume: true);
+                });
+                return;
+            }
             UpdateHeader();
             ConfigPathText.Text = "Config: " + _session.ConfigPath;
             foreach (var i in _session.Issues) AddLog(i.IsError ? LogLevel.Error : LogLevel.Warning, "Config: " + i.Message);
@@ -216,6 +238,7 @@ namespace StigGpoManager
         private void ReloadConfig_Click(object sender, RoutedEventArgs e)
         {
             if (IsBusy) return;
+            if (_session.IsDemo) { MessageBox.Show(this, "Demo mode uses a generated config; restart without /demo to use your own.", Title); return; }
             _session.LoadConfig();
             Connect();
         }
@@ -794,6 +817,103 @@ namespace StigGpoManager
                 PromoteGateText.Text = $"Last gate evaluation {_run.Gate.EvaluatedUtc.ToLocalTime():yyyy-MM-dd HH:mm}: {(_run.Gate.Passed ? "PASS" : "FAIL")} - {_run.Gate.Summary}";
                 GateText.Text = PromoteGateText.Text;
             }
+        }
+    
+        // ================================================================ screenshot tour (/screenshots)
+
+        /// <summary>
+        /// Walks every step of the demo run and saves a PNG of each screen (used by CI to produce the
+        /// README screenshots). Returns the process exit code.
+        /// </summary>
+        public async Task<int> RunScreenshotTour(string folder)
+        {
+            try
+            {
+                Directory.CreateDirectory(folder);
+                Width = 1400; Height = 880;
+                await WaitIdle(requireRun: true);
+                ShowCommands.IsChecked = false;
+
+                await Shot(folder, "01-start-preflight", "PanelStart");
+                await Shot(folder, "02-load-package", "PanelLoad");
+                CompareStore_Click(null, null); await WaitIdle();
+                StoreHideUnchanged.IsChecked = false;
+                await Shot(folder, "03-central-store", "PanelStore");
+                await Shot(folder, "04-import", "PanelImport");
+                Review_Click(null, null); await WaitIdle();
+                await Shot(folder, "05-review-diff", "PanelReview");
+                await Shot(folder, "06-pilot", "PanelPilot");
+                EvaluateGate_Click(null, null); await WaitIdle();
+                await Shot(folder, "07-scan-gate", "PanelScans");
+                PromoteChecks_Click(null, null); await WaitIdle();
+                ListComputers(false); await WaitIdle();
+                await Shot(folder, "08-promote", "PanelPromote");
+
+                var plan = await Task.Run(() => Engine.PlanPilot(_run, _run.Items));
+                var dlg = new ConfirmWindow(this, plan) { Width = 1000, Height = 720, WindowStartupLocation = WindowStartupLocation.Manual, Left = Left + 60, Top = Top + 40 };
+                dlg.Show();
+                await Settle();
+                Save(dlg, Path.Combine(folder, "09-confirm-dialog.png"));
+                dlg.Close();
+
+                await Shot(folder, "10-rollback", "PanelRollback");
+                FindCleanup_Click(null, null); await WaitIdle();
+                if (CleanupGrid.ItemsSource is List<CleanupRow> rows && rows.Count > 0) rows[0].Selected = true;
+                await Shot(folder, "11-cleanup", "PanelCleanup");
+                await Shot(folder, "12-exceptions-register", "PanelRegister");
+                await Shot(folder, "13-audit-log", "PanelAudit");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                File.WriteAllText(Path.Combine(folder, "error.txt"), ex.ToString());
+                return 1;
+            }
+        }
+
+        private async Task WaitIdle(bool requireRun = false)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(90);
+            int idle = 0;
+            while (DateTime.UtcNow < deadline && idle < 3)
+            {
+                await Task.Delay(200);
+                idle = !IsBusy && (!requireRun || _run != null) ? idle + 1 : 0;
+            }
+            await Settle();
+        }
+
+        private async Task Settle()
+        {
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+            await Task.Delay(300);
+            await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+        }
+
+        private async Task Shot(string folder, string name, string panel)
+        {
+            GoTo(panel);
+            await Settle();
+            Save(this, Path.Combine(folder, name + ".png"));
+        }
+
+        /// <summary>Renders a window's client area (with an opaque background) to PNG.</summary>
+        private static void Save(Window window, string path)
+        {
+            window.UpdateLayout();
+            var root = (FrameworkElement)window.Content;
+            int w = (int)Math.Ceiling(root.ActualWidth), h = (int)Math.Ceiling(root.ActualHeight);
+            var visual = new DrawingVisual();
+            using (var dc = visual.RenderOpen())
+            {
+                dc.DrawRectangle(SystemColors.WindowBrush, null, new Rect(0, 0, w, h));
+                dc.DrawRectangle(new VisualBrush(root), null, new Rect(0, 0, w, h));
+            }
+            var bmp = new System.Windows.Media.Imaging.RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
+            bmp.Render(visual);
+            var enc = new System.Windows.Media.Imaging.PngBitmapEncoder();
+            enc.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(bmp));
+            using (var fs = File.Create(path)) enc.Save(fs);
         }
     }
 }

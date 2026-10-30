@@ -60,6 +60,24 @@ jobs:
           $p = Start-Process -FilePath dist/StigGpoManager.exe -ArgumentList 'cli', 'sample-config' -Wait -PassThru -WindowStyle Hidden
           if ($p.ExitCode -ne 0) { throw "StigGpoManager.exe cli sample-config exited with $($p.ExitCode)" }
 
+      - name: Screenshots (demo mode, simulated domain)
+        shell: pwsh
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          $out = Join-Path $pwd 'screenshots'
+          $p = Start-Process -FilePath dist/StigGpoManager.exe -ArgumentList '/screenshots', "`"$out`"" -Wait -PassThru
+          Get-ChildItem $out -ErrorAction SilentlyContinue | Format-Table Name, Length
+          if (Test-Path "$out/error.txt") { Get-Content "$out/error.txt" }
+          if ($p.ExitCode -ne 0) { throw "Screenshot tour exited with $($p.ExitCode)" }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots
+          path: screenshots/
+          if-no-files-found: ignore
+
       - uses: actions/upload-artifact@v4
         with:
           name: StigGpoManager-${{ env.VERSION }}
