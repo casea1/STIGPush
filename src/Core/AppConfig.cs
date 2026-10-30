@@ -33,7 +33,8 @@ namespace StigGpoManager.Core
         private Regex _regex;
         public Regex MatchRegex => _regex ?? (_regex = new Regex(Match, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
 
-        public bool IsMatch(string displayName) => !string.IsNullOrEmpty(displayName) && MatchRegex.IsMatch(displayName);
+        /// <summary>True if Match fits the backup name, or a spelled-out / abbreviated form of it (see NameVariants).</summary>
+        public bool IsMatch(string displayName) => !string.IsNullOrEmpty(displayName) && NameVariants.Of(displayName).Any(v => MatchRegex.IsMatch(v));
 
         public string RenderName(StigVersion version)
         {

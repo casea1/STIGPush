@@ -148,6 +148,7 @@ namespace StigGpoManager
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
+            Resources.MergedDictionaries.Add(new ResourceDictionary { Source = new Uri("pack://application:,,,/StigGpoManager;component/Theme.xaml", UriKind.Absolute) });
             DispatcherUnhandledException += (s, ex) =>
             {
                 if (_screenshotDir != null) { Console.Error.WriteLine(ex.Exception); Shutdown(1); ex.Handled = true; return; }

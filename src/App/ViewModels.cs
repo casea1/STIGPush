@@ -74,7 +74,10 @@ namespace StigGpoManager
             {
                 if (_lockedReason != null) return _lockedReason;
                 if (_error != null) return _error;
-                if (Candidate.Mapping == null) return "No mapping matches; skipped unless you assign one.";
+                if (Candidate.Mapping == null)
+                    return Candidate.SuggestedMapping != null
+                        ? $"No mapping matches. Closest: {Candidate.SuggestedMapping.NameTemplate}"
+                        : "No mapping matches; skipped unless you assign one.";
                 if (Candidate.Version == null) return "Enter the version (e.g. v1r4).";
                 return Candidate.AllMatches.Count > 1 && Candidate.AllMatches.Contains(Candidate.Mapping) ? Candidate.Problem : "";
             }

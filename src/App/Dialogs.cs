@@ -35,10 +35,12 @@ namespace StigGpoManager
             Width = 900; Height = 680; MinWidth = 500; MinHeight = 300;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             ShowInTaskbar = false;
+            FontFamily = new FontFamily("Segoe UI"); FontSize = 13;
 
-            var root = new DockPanel { Margin = new Thickness(10) };
+            var root = new DockPanel { Margin = new Thickness(16) };
             var header = new StackPanel();
-            header.Children.Add(new TextBlock { Text = plan.Title, FontSize = 16, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 6) });
+            header.Children.Add(new TextBlock { Text = plan.Title, FontSize = 18, FontWeight = FontWeights.SemiBold, Margin = new Thickness(0, 0, 0, 4) });
+            header.Children.Add(new TextBlock { Text = "Nothing has changed yet. Review exactly what will happen below, then confirm.", Foreground = Brushes.DimGray, Margin = new Thickness(0, 0, 0, 8) });
             foreach (var b in plan.Blockers)
                 header.Children.Add(Banner("BLOCKED: " + b, Brushes.DarkRed, Color.FromRgb(0xFF, 0xD6, 0xD6)));
             foreach (var w in plan.Warnings)
@@ -66,9 +68,10 @@ namespace StigGpoManager
                 footer.Children.Add(row);
             }
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 8, 0, 0) };
-            _ok = new Button { Content = "Push changes", Width = 130, Height = 28, Margin = new Thickness(0, 0, 8, 0), IsDefault = false };
+            _ok = new Button { Content = "Push changes", MinWidth = 140, Margin = new Thickness(0, 0, 8, 0), IsDefault = false };
+            _ok.SetResourceReference(StyleProperty, "PrimaryButton");
             _ok.Click += (s, e) => { Result.Confirmed = true; Result.TypedWord = _word?.Text; Result.DcBackupConfirmed = _acks.Count > 0 && _acks.All(c => c.IsChecked == true); DialogResult = true; };
-            var cancel = new Button { Content = "Cancel", Width = 90, Height = 28, IsCancel = true };
+            var cancel = new Button { Content = "Cancel", MinWidth = 90, IsCancel = true, Margin = new Thickness(0) };
             buttons.Children.Add(_ok);
             buttons.Children.Add(cancel);
             footer.Children.Add(buttons);
@@ -77,7 +80,7 @@ namespace StigGpoManager
 
             var text = new TextBox
             {
-                Text = PlanText(plan), IsReadOnly = true, FontFamily = new FontFamily("Consolas"), FontSize = 12,
+                Text = PlanText(plan), IsReadOnly = true, FontFamily = new FontFamily("Consolas"), FontSize = 12, Padding = new Thickness(8),
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
                 TextWrapping = TextWrapping.NoWrap,
             };
@@ -100,7 +103,7 @@ namespace StigGpoManager
 
         private static Border Banner(string text, Brush fg, Color bg) => new Border
         {
-            Background = new SolidColorBrush(bg), Padding = new Thickness(6, 3, 6, 3), Margin = new Thickness(0, 1, 0, 1),
+            Background = new SolidColorBrush(bg), Padding = new Thickness(10, 6, 10, 6), Margin = new Thickness(0, 2, 0, 2), CornerRadius = new CornerRadius(6),
             Child = new TextBlock { Text = text, Foreground = fg, TextWrapping = TextWrapping.Wrap },
         };
 
@@ -129,6 +132,7 @@ namespace StigGpoManager
         {
             Owner = owner; Title = title; Width = 560; SizeToContent = SizeToContent.Height;
             WindowStartupLocation = WindowStartupLocation.CenterOwner; ShowInTaskbar = false; ResizeMode = ResizeMode.NoResize;
+            FontFamily = new FontFamily("Segoe UI"); FontSize = 13;
             var panel = new StackPanel { Margin = new Thickness(12) };
             if (!string.IsNullOrEmpty(intro)) panel.Children.Add(new TextBlock { Text = intro, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 0, 0, 8) });
             foreach (var l in labels)

@@ -549,7 +549,7 @@ namespace StigGpoManager.Core
             if (list.Count == 0) plan.Blockers.Add("No GPOs selected.");
             foreach (var c in list)
             {
-                plan.Add("Backup", c.Gpo.DisplayName, $"Backup-GPO to {Path.Combine(Config.BackupsFolder, "deleted-<timestamp>")}");
+                plan.Add("Backup", c.Gpo.DisplayName, $"Backup-GPO to {Config.BackupsFolder}{Path.DirectorySeparatorChar}deleted-(date-time)");
                 plan.Add("DELETE", c.Gpo.DisplayName, $"Remove-GPO {c.Gpo.Id} ({c.Reason}; newest is {c.LatestVersion})");
             }
             return plan;

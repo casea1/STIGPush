@@ -244,6 +244,17 @@ namespace StigGpoManager.Tests
             Assert.True(_ad.Calls.IndexOf("BackupGpo DoD WinSvr2025 MS STIG Comp v1r1") < _ad.Calls.IndexOf("RemoveGpo DoD WinSvr2025 MS STIG Comp v1r1"));
         }
 
+        /// <summary>.NET Framework rejects these in paths; plans must never Path.Combine placeholders (regression).</summary>
+        [Fact]
+        public void PlanTextHasNoCharactersInvalidInWindowsPaths()
+        {
+            var run = _engine.CreateRun(_zip, null, out var scan);
+            var candidates = MappingResolver.Resolve(scan.Backups, _cfg);
+            var plans = new[] { _engine.PlanImport(run, candidates), _engine.PlanCleanup(new CleanupCandidate[0]) };
+            foreach (var c in plans.SelectMany(p => p.Changes).Where(c => c.Kind == "Backup"))
+                Assert.DoesNotContain(c.Target + c.Description, ch => ch == '<' || ch == '>' || ch == '|');
+        }
+
         [Fact]
         public void PlansNeverChangeAnything()
         {

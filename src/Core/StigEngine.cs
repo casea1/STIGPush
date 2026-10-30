@@ -213,7 +213,7 @@ namespace StigGpoManager.Core
         {
             var copies = items.Where(i => i.WillCopy).ToList();
             var store = Config.EffectiveCentralStorePath;
-            if (copies.Count == 0) { Info("Central Store: nothing to copy."); return; }
+            if (copies.Count == 0) { Info("Central Store: nothing to copy."); MarkCentralStoreCurrent(run); return; }
             var zip = Do(run, "BackupCentralStore", store, () => CentralStore.BackupStore(store, Config.BackupsFolder, DateTime.Now));
             run.Backups.Add(zip);
             Save(run);
@@ -225,9 +225,18 @@ namespace StigGpoManager.Core
                    () => CentralStore.CopyItem(i), $"source={i.Source.FullPath}; sha256={i.Source.Sha256}");
                 done++;
             }
-            run.SetPhase(RunPhase.CentralStoreUpdated, User, $"{done} files copied");
+            run.SetPhase(RunPhase.CentralStoreUpdated, User, $"{done} file(s) copied");
             Save(run);
             Ok($"Central Store updated: {done} file(s).");
+        }
+
+        /// <summary>Records that the Central Store needed no changes (so the step counts as complete).</summary>
+        public void MarkCentralStoreCurrent(RunState run)
+        {
+            if (run.Phase < RunPhase.CentralStoreUpdated) run.SetPhase(RunPhase.CentralStoreUpdated, User, "Already up to date");
+            else run.History.Add(new PhaseEvent { Phase = RunPhase.CentralStoreUpdated.ToString(), Utc = DateTime.UtcNow, User = User, Note = "Already up to date" });
+            Save(run);
+            Audit.Write(run.RunId, "CentralStoreCheck", Config.EffectiveCentralStorePath, "UpToDate");
         }
 
         // ================================================================ 3. import
@@ -239,7 +248,8 @@ namespace StigGpoManager.Core
             plan.Blockers.AddRange(MappingResolver.ValidateSelection(list));
             var selected = list.Where(c => !c.Skip && c.Mapping != null && c.Version != null).ToList();
             if (selected.Count == 0) return plan;
-            var backupDir = Path.Combine(Config.BackupsFolder, "gpo-<timestamp>");
+            // Display text only: '<' and '>' are invalid in .NET Framework paths, so never Path.Combine a placeholder.
+            var backupDir = Config.BackupsFolder + Path.DirectorySeparatorChar + "gpo-(date-time)";
             plan.Add("Backup", backupDir, "Backup-GPO -All (pre-flight backup of every GPO in the domain)");
             foreach (var c in selected)
             {

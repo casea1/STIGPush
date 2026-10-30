@@ -199,6 +199,30 @@ namespace StigGpoManager.Tests
             Assert.True(c[1].Skip);
         }
 
+        [Theory]
+        [InlineData("WinSvr 2025.*Member Server.*Computer", "DoD WinSvr 2025 MS STIG Comp v1r1", true)]
+        [InlineData("WinSvr 2025.*Member Server.*Computer", "DoD Windows Server 2025 Member Server STIG Computer v1r1", true)]
+        [InlineData("WinSvr 2025.*Member Server.*Computer", "DoD WinSvr 2025 DC STIG Comp v1r1", false)]
+        [InlineData("WinSvr 2025.*Member Server.*Computer", "DoD WinSvr 2025 MS and DC STIG User v1r1", false)]
+        [InlineData("WinSvr 2025.*Domain Controller.*Computer", "DoD WinSvr 2025 DC STIG Comp v1r1", true)]
+        [InlineData("Windows 11.*User", "DoD Windows 11 STIG User v2r3", true)]
+        [InlineData("Windows 11.*User", "DoD Win11 STIG User v2r3", true)]
+        [InlineData("Windows 11.*User", "DoD WinSvr 2025 MS and DC STIG User v1r1", false)]
+        [InlineData("Windows 11.*Computer", "DoD Windows 11 STIG Computer v2r3", true)]
+        public void MatchesAbbreviatedAndSpelledOutDisaNames(string regex, string backup, bool expected) =>
+            Assert.Equal(expected, new GpoMapping { Match = regex, NameTemplate = "x {Version}" }.IsMatch(backup));
+
+        [Fact]
+        public void UnmatchedBackupGetsClosestMappingHint()
+        {
+            var cfg = Cfg();
+            cfg.Mappings[0].Match = "this matches nothing";
+            var c = MappingResolver.Resolve(new[] { B("DoD WinSvr 2025 MS STIG Comp v1r4") }, cfg);
+            Assert.Null(c[0].Mapping);
+            Assert.Equal("DoD WinSvr2025 MS STIG Comp {Version}", c[0].SuggestedMapping.NameTemplate);
+            Assert.Contains("Closest", c[0].Problem);
+        }
+
         [Fact]
         public void MissingVersionDefaultsToSkip()
         {

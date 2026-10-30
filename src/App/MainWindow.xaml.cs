@@ -42,12 +42,14 @@ namespace StigGpoManager
             if (session.IsDemo)
             {
                 Title = "STIG GPO Manager - DEMO (simulated domain, no AD changes)";
-                HeaderBorder.Background = new SolidColorBrush(Color.FromRgb(0x8A, 0x4B, 0x08));
+                HeaderBorder.Background = new SolidColorBrush(Color.FromRgb(0x92, 0x40, 0x0E));
                 session.Engine.Log += AddLog;
             }
             LogList.ItemsSource = _log;
             PilotChecklist.ItemsSource = StigEngine.PilotChecklist;
             RegisterGrid.ItemsSource = _register;
+            _steps = BuildSteps();
+            StepList.ItemsSource = _steps;
             StepList.SelectedIndex = 0;
             Loaded += (s, e) => Connect();
             Closed += (s, e) => _session.Dispose();
@@ -155,19 +157,200 @@ namespace StigGpoManager
             else if (File.Exists(path)) Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
         }
 
+        // ================================================================ steps, guide and Next button
+
+        private List<StepItem> _steps;
+        private List<CheckResult> _lastPreflight;
+        private StepItem _shown;
+
+        private static StepItem Step(string panel, string number, string title, string what, string doText, string changes, bool main = true) =>
+            new StepItem { Panel = panel, Number = number, Title = title, What = what, Do = doText, Changes = changes, IsMain = main };
+
+        private List<StepItem> BuildSteps() => new List<StepItem>
+        {
+            Step("PanelStart", "0", "Start / pre-flight",
+                 "Checks this computer, your rights and the domain, and lists the quarterly runs (a run keeps everything for one DISA package, so you can come back after the pilot soak).",
+                 "Fix any red rows (Setup wizard if the config is missing). Then resume an open run, or click Next to start a new one.",
+                 "None."),
+            Step("PanelLoad", "1", "Load DISA package",
+                 "Opens the DISA GPO zip, shows its SHA-256, and finds every GPO backup and template inside it.",
+                 "Drop the zip here and click Load package. Red rows match no mapping: pick one in the Mapping column or leave them skipped. Matching uses the GPO names inside the package, not this computer.",
+                 "None."),
+            Step("PanelStore", "2", "Central Store",
+                 "Compares the package's ADMX/ADML templates with the domain Central Store. Newer files win; the store is never downgraded.",
+                 "Click Compare. If files are New or Updated, click Push to back up the store and copy them. If everything is up to date this step completes by itself.",
+                 "Copies template files into SYSVOL PolicyDefinitions after zipping a backup. No GPO changes."),
+            Step("PanelImport", "3", "Import new GPOs",
+                 "Backs up every GPO, then creates one NEW GPO per selected backup, named with its version (e.g. ... v1r4).",
+                 "Check the list and click Push: import.",
+                 "Creates new GPOs. Never overwrites an existing GPO. Links nothing."),
+            Step("PanelReview", "4", "Review changes",
+                 "Compares each new GPO with the version in use, and checks your exception GPOs against what DISA changed.",
+                 "Click Run review. Read red rows (user rights / restricted groups your exceptions replace) and yellow rows. Keep the HTML report.",
+                 "None."),
+            Step("PanelPilot", "5", "Pilot",
+                 "Links each new GPO to the pilot OUs (or to production, filtered to the pilot group), always below your exception GPOs.",
+                 "Click Push: link pilot. Then gpupdate and scan the pilot machines, test, and let them soak 1-2 weeks. You can close the tool meanwhile.",
+                 "Creates links (and security filtering for group pilot). Link order is verified."),
+            Step("PanelScans", "6", "Scan results gate",
+                 "Reads SCC / Evaluate-STIG results from pilot machines and compares open findings with the exceptions register.",
+                 "Drop the .ckl / .cklb / XCCDF files. Fix blocking findings and re-scan, or add them to the register with a justification.",
+                 "None."),
+            Step("PanelPromote", "7", "Promote",
+                 "Links each new GPO to production, disables (does not delete) the previous version, and removes pilot links.",
+                 "Click Push: PROMOTE and type PROMOTE. Then refresh policy on the computers.",
+                 "Creates and reorders links, disables old-version links. The old GPO stays for one-click rollback."),
+            Step("PanelRollback", "", "Rollback (if needed)",
+                 "Puts every OU this run touched back the way it was before the run.",
+                 "Tick the GPOs (or roll back the whole run) and click Push.",
+                 "Re-enables old-version links, disables new ones, restores the recorded link order.", main: false),
+            Step("PanelCleanup", "", "Cleanup (next quarter)",
+                 "Finds DISA GPOs two or more versions old with no enabled links.",
+                 "Next quarter: Find candidates, tick the ones to delete, Push and type DELETE.",
+                 "Backs up, then deletes, the selected old GPOs.", main: false),
+            new StepItem { IsSeparator = true, Title = "TOOLS" },
+            Step("PanelRegister", "", "Exceptions register",
+                 "Your accepted deviations: V-ID, justification and POA&M reference. Open findings listed here do not block Promote.",
+                 "Add or edit rows and click Save register.", "None (a local file).", main: false),
+            Step("PanelAudit", "", "Audit log",
+                 "Every change the tool made, who made it and the result. Append-only.", "Filter to the current run for your SSP / POA&M evidence.", "None.", main: false),
+        };
+
         private void StepList_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (!(StepList.SelectedItem is ListBoxItem item) || !(item.Tag is string panel)) return;
+            if (!(StepList.SelectedItem is StepItem item)) return;
+            if (item.IsSeparator) { StepList.SelectedItem = _shown; return; }
+            _shown = item;
             foreach (UIElement child in Panels.Children)
-                child.Visibility = (child as FrameworkElement)?.Name == panel ? Visibility.Visible : Visibility.Collapsed;
-            if (panel == "PanelAudit") LoadAudit();
-            if (panel == "PanelRegister") LoadRegister();
+                child.Visibility = (child as FrameworkElement)?.Name == item.Panel ? Visibility.Visible : Visibility.Collapsed;
+            StepTitle.Text = (string.IsNullOrEmpty(item.Number) || item.Number == "0" ? "" : item.Number + ". ") + item.Title;
+            GuideWhat.Text = item.What;
+            GuideDo.Text = item.Do;
+            GuideChanges.Text = item.Changes;
+            if (item.Panel == "PanelAudit") LoadAudit();
+            if (item.Panel == "PanelRegister") LoadRegister();
+            UpdateFooter();
         }
 
         private void GoTo(string panel)
         {
-            foreach (var o in StepList.Items)
-                if (o is ListBoxItem li && (li.Tag as string) == panel) { StepList.SelectedItem = li; return; }
+            var step = _steps?.FirstOrDefault(s => s.Panel == panel);
+            if (step != null) StepList.SelectedItem = step;
+        }
+
+        private static bool Reached(RunState r, RunPhase p) =>
+            r != null && (r.Phase == p || r.History.Any(h => h.Phase == p.ToString()));
+
+        /// <summary>Works out each step's state from the run and the last pre-flight, marks the next step, refreshes the footer.</summary>
+        private void RefreshSteps()
+        {
+            if (_steps == null) return;
+            var r = _run;
+            var soak = _session.Config?.SoakDays ?? 14;
+            foreach (var s in _steps.Where(x => !x.IsSeparator))
+            {
+                StepState st = s.IsMain ? StepState.Pending : StepState.Optional;
+                string cap = "";
+                switch (s.Panel)
+                {
+                    case "PanelStart":
+                        if (_lastPreflight == null) cap = Engine == null ? "Not connected" : "Checking...";
+                        else if (_lastPreflight.Any(c => c.Status == CheckStatus.Fail)) { st = StepState.Attention; cap = $"{_lastPreflight.Count(c => c.Status == CheckStatus.Fail)} check(s) failed"; }
+                        else { st = StepState.Done; cap = "Checks passed"; }
+                        break;
+                    case "PanelLoad":
+                        if (r != null) { st = StepState.Done; cap = r.Package?.HashMatches == false ? "HASH MISMATCH" : r.Package?.Name; if (r.Package?.HashMatches == false) st = StepState.Attention; }
+                        else cap = "No package loaded";
+                        break;
+                    case "PanelStore":
+                        if (Reached(r, RunPhase.CentralStoreUpdated)) { st = StepState.Done; cap = r.History.LastOrDefault(h => h.Phase == "CentralStoreUpdated")?.Note ?? "Updated"; }
+                        else cap = r == null ? "" : "Not checked yet";
+                        break;
+                    case "PanelImport":
+                        var n = r?.Items.Count(i => i.NewGpoId != null) ?? 0;
+                        if (r != null && r.Items.Any(i => i.Status == ItemStatus.Failed)) { st = StepState.Attention; cap = "An import failed"; }
+                        else if (n > 0) { st = StepState.Done; cap = $"{n} GPO(s) created"; }
+                        break;
+                    case "PanelReview":
+                        if (Reached(r, RunPhase.Reviewed))
+                        {
+                            var warn = r.Items.Sum(i => i.ReplacementWarnings);
+                            st = StepState.Done;
+                            cap = warn > 0 ? $"Reviewed - {warn} replacement warning(s)" : "Reviewed";
+                        }
+                        break;
+                    case "PanelPilot":
+                        if (r != null && r.Items.Any(i => i.Status == ItemStatus.Piloted || i.Status == ItemStatus.Promoted)) { st = StepState.Done; cap = r.Phase == RunPhase.Piloted ? r.StatusText(soak, DateTime.UtcNow) : "Piloted"; }
+                        break;
+                    case "PanelScans":
+                        if (r?.Gate != null) { st = r.Gate.Passed ? StepState.Done : StepState.Attention; cap = r.Gate.Passed ? "Gate passed" : $"{r.Gate.BlockingCount} blocking finding(s)"; }
+                        else if (r != null && !(_session.Config?.RequireScanGate ?? true) && Reached(r, RunPhase.Piloted)) { st = StepState.Done; cap = "Gate optional (off)"; }
+                        break;
+                    case "PanelPromote":
+                        if (Reached(r, RunPhase.Promoted)) { st = StepState.Done; cap = r.StatusText(soak, DateTime.UtcNow); }
+                        break;
+                    case "PanelRollback":
+                        if (r != null && r.Items.Any(i => i.Status == ItemStatus.RolledBack)) { st = StepState.Done; cap = "Rolled back"; }
+                        else cap = "Only if something breaks";
+                        break;
+                    case "PanelCleanup": cap = "Following quarter"; break;
+                    default: st = StepState.Tool; break;
+                }
+                s.State = st;
+                s.Caption = cap;
+            }
+            var next = _steps.FirstOrDefault(s => s.IsMain && s.State != StepState.Done);
+            if (next != null && next.State == StepState.Pending) { next.State = StepState.Next; if (string.IsNullOrEmpty(next.Caption)) next.Caption = "Next"; }
+            UpdateFooter();
+        }
+
+        private StepItem NextMainAfter(StepItem current)
+        {
+            var mains = _steps.Where(s => s.IsMain).ToList();
+            int i = mains.IndexOf(current);
+            if (i >= 0 && i + 1 < mains.Count) return mains[i + 1];
+            if (i < 0) return mains.FirstOrDefault(s => s.State != StepState.Done);
+            return null;
+        }
+
+        private void UpdateFooter()
+        {
+            if (_shown == null || NextButton == null) return;
+            var done = _shown.State == StepState.Done;
+            var target = NextMainAfter(_shown);
+            StepFooter.Visibility = Visibility.Visible;
+            if (_shown.State == StepState.Tool || _shown.State == StepState.Optional && !done)
+            {
+                StepStateBadge.Background = (Brush)FindResource("AccentSoft");
+                StepStateText.Text = _shown.State == StepState.Tool ? "Tool" : "Optional";
+            }
+            else if (done) { StepStateBadge.Background = (Brush)FindResource("SuccessSoft"); StepStateText.Text = "✓ Done"; }
+            else if (_shown.State == StepState.Attention) { StepStateBadge.Background = (Brush)FindResource("WarnSoft"); StepStateText.Text = "! Needs attention"; }
+            else { StepStateBadge.Background = (Brush)FindResource("WarnSoft"); StepStateText.Text = "Not done yet"; }
+            StepStateDetail.Text = _shown.Caption;
+
+            if (target == null)
+            {
+                NextButton.Content = _shown.Panel == "PanelPromote" && done ? "Quarter complete ✓" : "Back to start";
+                NextButton.Tag = "PanelStart";
+            }
+            else
+            {
+                NextButton.Content = "Next: " + target.Title + "  →";
+                NextButton.Tag = target.Panel;
+            }
+            NextButton.Style = (Style)FindResource(done ? "PrimaryButton" : typeof(Button));
+            NextButton.ToolTip = done ? "This step is complete." : "This step is not complete yet; you can still move on.";
+        }
+
+        private void NextStep_Click(object sender, RoutedEventArgs e)
+        {
+            if (NextButton.Tag is string panel)
+            {
+                if (panel == "PanelLoad" && _shown?.Panel == "PanelStart" && _run != null && _run.Phase != RunPhase.Closed && _run.Phase != RunPhase.RolledBack)
+                    panel = NextPanelFor(_run);
+                GoTo(panel);
+            }
         }
 
         // ================================================================ start / config / runs
@@ -185,6 +368,7 @@ namespace StigGpoManager
                 RunOp("Running pre-flight checks (demo)", () => _session.Preflight(false), results =>
                 {
                     PreflightGrid.ItemsSource = results;
+                    _lastPreflight = results;
                     UpdateHeader();
                     RefreshRuns(autoResume: true);
                 });
@@ -195,7 +379,8 @@ namespace StigGpoManager
             foreach (var i in _session.Issues) AddLog(i.IsError ? LogLevel.Error : LogLevel.Warning, "Config: " + i.Message);
             if (_session.Config == null || !_session.ConfigValid)
             {
-                PreflightGrid.ItemsSource = _session.Preflight(false);
+                PreflightGrid.ItemsSource = _lastPreflight = _session.Preflight(false);
+                RefreshSteps();
                 if (!File.Exists(_session.ConfigPath))
                 {
                     if (MessageBox.Show(this, $"No configuration yet ({_session.ConfigPath}).\n\nRun the setup wizard now? It detects the domain, exception-GPO prefix, pilot group and current DISA GPO links, and asks you to confirm each value.",
@@ -217,6 +402,7 @@ namespace StigGpoManager
             }, results =>
             {
                 PreflightGrid.ItemsSource = results;
+                _lastPreflight = results;
                 UpdateHeader();
                 var fails = results.Count(r => r.Status == CheckStatus.Fail);
                 AddLog(fails == 0 ? LogLevel.Success : LogLevel.Warning, $"Pre-flight: {results.Count(r => r.Status == CheckStatus.Pass)} passed, {results.Count(r => r.Status == CheckStatus.Warning)} warnings, {fails} failed.");
@@ -236,7 +422,7 @@ namespace StigGpoManager
         {
             if (!RequireEngine()) return;
             bool dcdiag = DcDiagCheck.IsChecked == true;
-            RunOp("Pre-flight checks", () => _session.Preflight(dcdiag), r => PreflightGrid.ItemsSource = r);
+            RunOp("Pre-flight checks", () => _session.Preflight(dcdiag), r => { PreflightGrid.ItemsSource = r; _lastPreflight = r; });
         }
 
         private void Setup_Click(object sender, RoutedEventArgs e) => OpenSetup();
@@ -393,6 +579,16 @@ namespace StigGpoManager
             ZipPathText.Text = path;
         }
 
+        private void UseSuggestions_Click(object sender, RoutedEventArgs e)
+        {
+            var rows = _backupRows.Where(r => r.Candidate.Mapping == null && r.Candidate.SuggestedMapping != null).ToList();
+            if (rows.Count == 0) { MessageBox.Show(this, "There are no suggestions for the red rows. Pick a mapping in the Mapping column, or add one in the setup wizard.", Title); return; }
+            foreach (var r in rows) r.Mapping = r.Candidate.SuggestedMapping;
+            MappingResolver.FlagConflicts(_backupRows.Select(r => r.Candidate).ToList());
+            AddLog(LogLevel.Info, $"Assigned suggested mappings to {rows.Count} backup(s). Check the New GPO name column before importing.");
+            BackupsGrid.Items.Refresh();
+        }
+
         private static string HashLine(PackageRecord p)
         {
             if (p == null) return "";
@@ -453,6 +649,12 @@ namespace StigGpoManager
                 _storeRows = items.Select(i => new StoreRow(i)).ToList();
                 ApplyStoreFilter();
                 StoreSummary.Text = $"New {items.Count(i => i.Status == CentralStoreStatus.New)}, Updated {items.Count(i => i.Status == CentralStoreStatus.Updated)}, Unchanged {items.Count(i => i.Status == CentralStoreStatus.Unchanged)}, Skipped (store newer) {items.Count(i => i.Status == CentralStoreStatus.SkippedStoreNewer)}";
+                if (!items.Any(i => i.WillCopy))
+                {
+                    Engine.MarkCentralStoreCurrent(_run);
+                    AddLog(LogLevel.Success, "Central Store is already up to date; nothing to copy. Step complete.");
+                    RefreshSteps();
+                }
             });
         }
 
@@ -806,6 +1008,7 @@ namespace StigGpoManager
         private void RefreshRunViews()
         {
             UpdateHeader();
+            RefreshSteps();
             if (_run == null)
             {
                 RunItemsGrid.ItemsSource = null; PilotGrid.ItemsSource = null; PromoteGrid.ItemsSource = null;

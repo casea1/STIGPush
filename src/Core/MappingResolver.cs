@@ -11,6 +11,8 @@ namespace StigGpoManager.Core
         public GpoMapping Mapping { get; set; }
         /// <summary>All mappings whose regex matched (more than one is a config problem worth showing).</summary>
         public List<GpoMapping> AllMatches { get; set; } = new List<GpoMapping>();
+        /// <summary>For an unmatched backup: the mapping whose name looks most similar (a hint, never applied automatically).</summary>
+        public GpoMapping SuggestedMapping { get; set; }
         public StigVersion Version { get; set; }
         public bool Skip { get; set; }
         public string Problem { get; set; }
@@ -36,7 +38,10 @@ namespace StigGpoManager.Core
                 if (c.Mapping == null)
                 {
                     c.Skip = true;
-                    c.Problem = "No mapping matches this backup; it will be skipped unless you assign one.";
+                    c.SuggestedMapping = Closest(b.DisplayName, config.Mappings);
+                    c.Problem = c.SuggestedMapping == null
+                        ? "No mapping matches this backup; it will be skipped unless you assign one."
+                        : $"No mapping matches. Closest: '{c.SuggestedMapping.NameTemplate}' - pick it in the Mapping column if that is right.";
                 }
                 else if (c.AllMatches.Count > 1)
                 {
@@ -51,6 +56,22 @@ namespace StigGpoManager.Core
             }
             FlagConflicts(list);
             return list;
+        }
+
+        /// <summary>Mapping whose name template shares the most words with the backup name (needs at least 60% overlap).</summary>
+        public static GpoMapping Closest(string backupName, IEnumerable<GpoMapping> mappings)
+        {
+            var b = NameVariants.Tokens(backupName);
+            GpoMapping best = null;
+            double bestScore = 0;
+            foreach (var m in mappings)
+            {
+                var t = NameVariants.Tokens(m.NameTemplate);
+                if (t.Count == 0 || b.Count == 0) continue;
+                double score = (double)t.Intersect(b).Count() / Math.Max(t.Count, b.Count);
+                if (score > bestScore) { bestScore = score; best = m; }
+            }
+            return bestScore >= 0.6 ? best : null;
         }
 
         /// <summary>Two selected backups that would produce the same GPO name cannot both be imported.</summary>

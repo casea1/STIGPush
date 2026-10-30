@@ -46,7 +46,7 @@ namespace StigGpoManager
             if (demo)
             {
                 Title += " - DEMO (simulated domain)";
-                SetupHeader.Background = new SolidColorBrush(Color.FromRgb(0x8A, 0x4B, 0x08));
+                SetupHeader.Background = new SolidColorBrush(Color.FromRgb(0x92, 0x40, 0x0E));
             }
             ModeColumn.ItemsSource = Modes;
             MappingsGrid.ItemsSource = _rows;

@@ -2,19 +2,15 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="STIG GPO Manager - Setup" Height="760" Width="1180" MinWidth="820" MinHeight="560"
-        Icon="Resources/app.ico" WindowStartupLocation="CenterOwner" FontSize="12">
+        Icon="Resources/app.ico" WindowStartupLocation="CenterOwner"
+        FontFamily="Segoe UI" FontSize="13" Background="{StaticResource AppBackground}" Foreground="{StaticResource Ink}">
     <Window.Resources>
-        <Style TargetType="Button">
-            <Setter Property="Padding" Value="10,3"/>
-            <Setter Property="Margin" Value="0,0,6,0"/>
-            <Setter Property="MinHeight" Value="26"/>
-        </Style>
         <Style x:Key="Label" TargetType="TextBlock">
             <Setter Property="FontWeight" Value="SemiBold"/>
             <Setter Property="Margin" Value="0,10,0,2"/>
         </Style>
         <Style x:Key="Hint" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#FF555555"/>
+            <Setter Property="Foreground" Value="{StaticResource Muted}"/>
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,2,0,0"/>
         </Style>
@@ -23,25 +19,21 @@
             <Setter Property="TextWrapping" Value="Wrap"/>
             <Setter Property="Margin" Value="0,2,0,0"/>
         </Style>
-        <Style TargetType="TextBox">
-            <Setter Property="MinHeight" Value="24"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/>
-        </Style>
     </Window.Resources>
     <DockPanel>
-        <Border x:Name="SetupHeader" DockPanel.Dock="Top" Background="#FF1F4E8C" Padding="12,8">
+        <Border x:Name="SetupHeader" DockPanel.Dock="Top" Background="{StaticResource HeaderBg}" Padding="16,12">
             <StackPanel>
-                <TextBlock Text="Setup" Foreground="White" FontSize="18" FontWeight="Bold"/>
-                <TextBlock x:Name="SetupSubtitle" Foreground="#FFDCE6F5" TextWrapping="Wrap"
+                <TextBlock Text="Setup wizard" Foreground="White" FontSize="18" FontWeight="SemiBold"/>
+                <TextBlock x:Name="SetupSubtitle" Foreground="#FF94A3B8" TextWrapping="Wrap"
                            Text="Values are detected from this domain where possible. Check each page, change anything that is wrong, then save. Nothing in Active Directory is changed by setup."/>
             </StackPanel>
         </Border>
-        <Border DockPanel.Dock="Bottom" Background="#FFEDEDED" BorderBrush="#FFCCCCCC" BorderThickness="0,1,0,0" Padding="10,6">
+        <Border DockPanel.Dock="Bottom" Background="White" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="12,8">
             <DockPanel>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                     <Button x:Name="BackButton" Content="&lt; Back" Width="90" Click="Back_Click"/>
                     <Button x:Name="NextButton" Content="Next &gt;" Width="90" Click="Next_Click"/>
-                    <Button x:Name="SaveButton" Content="Save config" Width="110" FontWeight="Bold" Background="#FFF2D7A6" Click="Save_Click"/>
+                    <Button x:Name="SaveButton" Content="Save config" Width="120" Style="{StaticResource PrimaryButton}" Click="Save_Click"/>
                     <Button Content="Cancel" Width="80" IsCancel="True"/>
                 </StackPanel>
                 <ProgressBar x:Name="SetupBusy" Width="120" Height="12" Margin="0,0,10,0" Visibility="Hidden" DockPanel.Dock="Left"/>
@@ -49,7 +41,7 @@
             </DockPanel>
         </Border>
 
-        <TabControl x:Name="Pages" Margin="10" SelectionChanged="Pages_SelectionChanged">
+        <TabControl x:Name="Pages" Margin="14" Background="White" BorderBrush="{StaticResource Line}" Padding="4" SelectionChanged="Pages_SelectionChanged">
             <!-- 1. DOMAIN -->
             <TabItem Header="1. Domain">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
