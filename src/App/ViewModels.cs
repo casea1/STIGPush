@@ -79,7 +79,13 @@ namespace StigGpoManager
                         ? $"No mapping matches. Closest: {Candidate.SuggestedMapping.NameTemplate}"
                         : "No mapping matches; skipped unless you assign one.";
                 if (Candidate.Version == null) return "Enter the version (e.g. v1r4).";
-                return Candidate.AllMatches.Count > 1 && Candidate.AllMatches.Contains(Candidate.Mapping) ? Candidate.Problem : "";
+                // Duplicates and name conflicts set Candidate.Problem too; every automatic Skip must say why.
+                var p = Candidate.Problem ?? "";
+                if (p.StartsWith("Duplicate of", StringComparison.Ordinal) && !Candidate.Skip)
+                    return "Duplicate in the package; you chose this copy (untick Skip on only one of them).";
+                if (p.StartsWith("Matches ", StringComparison.Ordinal) && !(Candidate.AllMatches.Count > 1 && Candidate.AllMatches.Contains(Candidate.Mapping)))
+                    return "";
+                return p;
             }
         }
     }
