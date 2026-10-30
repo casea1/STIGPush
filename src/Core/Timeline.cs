@@ -115,9 +115,9 @@ namespace StigGpoManager.Core
         /// Builds the calendar: one row per run (newest first) with its prepare, pilot and production
         /// periods, plus DISA release markers and the next expected release.
         /// </summary>
-        public static QuarterTimeline Build(IEnumerable<RunState> runs, int soakDays, DateTime today, int monthsBack = 9, int monthsForward = 5)
+        public static QuarterTimeline Build(IEnumerable<RunState> runs, int soakDays, DateTime now, int monthsBack = 9, int monthsForward = 5)
         {
-            today = today.Date;
+            var today = now.Date;
             var tl = new QuarterTimeline
             {
                 Today = today,
@@ -145,7 +145,7 @@ namespace StigGpoManager.Core
             {
                 var row = new TimelineRow
                 {
-                    RunId = r.RunId, Title = QuarterTitle(r), Status = r.StatusText(soakDays, today.ToUniversalTime()),
+                    RunId = r.RunId, Title = QuarterTitle(r), Status = r.StatusText(soakDays, now.ToUniversalTime()),
                     IsActive = r.Phase != RunPhase.Closed && r.Phase != RunPhase.RolledBack,
                 };
                 var created = r.CreatedUtc.ToLocalTime().Date;

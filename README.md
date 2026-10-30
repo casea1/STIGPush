@@ -1,375 +1,178 @@
 # STIG GPO Manager
 
-A single-file Windows tool (`StigGpoManager.exe`) that automates the AD side of the quarterly
-DISA STIG GPO import: drop in the DISA GPO zip, review what will change, then push it through
-pilot to production, with rollback, cleanup and an append-only audit trail. It installs into
-**Programs and Features**, adds a Start menu shortcut, and shows a **system tray icon** with the
-active run's status (for example `Pilot - day 9 of 14`).
+**The quarterly DISA STIG GPO update, in four steps: Prepare, Review, Pilot, Promote.**
 
-Built for air-gapped, accredited networks: no internet access, no telemetry, no runtime
-downloads, and no third-party DLLs. It uses only what ships with Windows Server 2025 / Windows 11:
-.NET Framework 4.8, Windows PowerShell 5.1, and the RSAT `GroupPolicy` and `ActiveDirectory` modules.
+Drop in DISA's GPO package. The tool imports each GPO as a new, versioned GPO, shows exactly what
+changed against the version in use and against your site exception GPOs, pilots it, and promotes it.
+Exception GPOs always stay on top, the old version is disabled (not deleted) so rollback is one click,
+and every change is written to an append-only audit log. A calendar on the home screen shows every
+quarterly update (past, current and the next DISA release) and where the current one is, including
+the pilot soak countdown.
 
-> **Test against a lab domain before any real use.** The same exe works in the lab and in production;
-> only `config.json` differs.
+Built for air-gapped, accredited networks: no internet access, no telemetry, nothing downloaded at
+run time and no third-party DLLs. It uses only what ships with Windows Server 2025 / Windows 11:
+.NET Framework 4.8, Windows PowerShell 5.1 and the RSAT `GroupPolicy` / `ActiveDirectory` modules.
 
-## Screenshots
+**[Download the latest release](https://github.com/casea1/STIGPush/releases)** (`StigGpoManager-Setup-<version>.exe`)
 
-Taken automatically on a Windows build machine by `StigGpoManager.exe /screenshots` (demo mode,
-simulated domain `lab.example.mil`).
+> Test a full quarter in a lab domain before production use. The same build works in both; only the
+> configuration differs, and the setup wizard detects it for each domain.
 
-**Review / diff**: setting-level changes, exception findings, and the red replacement-type warning
-![Review / diff](docs/screenshots/05-review-diff.png)
-
-**Scan results gate**: an open finding that is not in the exceptions register blocks Promote
-![Scan results gate](docs/screenshots/07-scan-gate.png)
-
-**Every Push shows the exact changes first**: here Promote is blocked by the gate, with the before/after link order for each OU
-![Confirmation dialog](docs/screenshots/09-confirm-dialog.png)
-
-**Setup wizard**: mappings detected from current links, previewed against the DISA package
-![Setup wizard - mappings](docs/screenshots/16-setup-3.png)
-
-<details>
-<summary>All screens</summary>
-
-| | |
-|---|---|
-| ![](docs/screenshots/01-start-preflight.png) Start / pre-flight and runs | ![](docs/screenshots/02-load-package.png) 1. Load package |
-| ![](docs/screenshots/03-central-store.png) 2. Central Store | ![](docs/screenshots/04-import.png) 3. Import |
-| ![](docs/screenshots/06-pilot.png) 5. Pilot | ![](docs/screenshots/08-promote.png) 6. Promote and policy refresh |
-| ![](docs/screenshots/10-rollback.png) 7. Rollback | ![](docs/screenshots/11-cleanup.png) 8. Cleanup |
-| ![](docs/screenshots/12-exceptions-register.png) Exceptions register | ![](docs/screenshots/13-audit-log.png) Audit log |
-| ![](docs/screenshots/14-setup-1.png) Setup: domain | ![](docs/screenshots/15-setup-2.png) Setup: naming and folders |
-| ![](docs/screenshots/17-setup-4.png) Setup: review and save | |
-
-</details>
-
----
+![Home: quarterly calendar, current update, history](docs/screenshots/01-home.png)
 
 ## Contents
 
-- [Screenshots](#screenshots)
-- [Requirements](#requirements)
 - [Install](#install)
-- [Configure (`config.json`)](#configure-configjson)
-- [The quarterly procedure](#the-quarterly-procedure)
-- [Rollback](#rollback)
-- [Phase 2: scan results as a promotion gate](#phase-2-scan-results-as-a-promotion-gate)
+- [Using it each quarter](#using-it-each-quarter)
+- [Rolling back](#rolling-back)
+- [Settings reference](#settings-reference)
 - [Where data lives](#where-data-lives)
 - [Command line](#command-line)
-- [How it decides link order](#how-it-decides-link-order)
+- [How link order is decided](#how-link-order-is-decided)
 - [Building from source](#building-from-source)
-- [Design and limits](#design-and-limits)
-
----
-
-## Requirements
-
-| | |
-|---|---|
-| OS | Windows Server 2025 (DC or member) or Windows 11 with RSAT |
-| Runtime | .NET Framework 4.8 and Windows PowerShell 5.1 (both built into these OSes) |
-| Modules | `GroupPolicy` and `ActiveDirectory` (installed on DCs; RSAT elsewhere) |
-| Rights | Member of **Domain Admins**, running elevated (the exe always asks for elevation) |
-| Domain | Single forest; the Central Store (`\\<domain>\SYSVOL\<domain>\Policies\PolicyDefinitions`) must exist |
-
-**Where to install:** one machine per network is enough. Use the **PDC emulator** (the tool sends
-every change to the PDC anyway); GPOs and SYSVOL replicate to the other DCs. The tool's own data
-(`WorkingFolder`) is ordinary files and does **not** replicate, so include it in that server's
-backups. If the PDC role moves, install the tool on the new PDC and copy `WorkingFolder` across;
-open runs resume there.
-
-**Accreditation:** an unsigned custom exe usually needs software approval, and on hosts that
-enforce AppLocker/WDAC a publisher or hash rule. Sign the exe with your enclave code-signing
-certificate if you have one. `build.ps1` writes the exe's SHA-256 for the transfer record.
+- [Status and limits](#status-and-limits)
 
 ## Install
 
-1. Copy `StigGpoManager.exe` onto the server (through your approved transfer process).
-2. Run `StigGpoManager.exe /install` (or just double-click it and answer **Yes** to *Install now?*).
-   This:
-   - copies the exe to `C:\Program Files\StigGpoManager\`
-   - adds **STIG GPO Manager** to *Programs and Features* (Settings > Apps); uninstalling there runs `/uninstall`
-   - adds an all-users Start menu shortcut
-   - registers the scheduled task **StigGpoManager Tray**, which starts the tray icon at logon for
-     Administrators with highest privileges, so there is no UAC prompt
-   - creates `C:\ProgramData\StigGpoManager\` (Administrators and SYSTEM only) for the config
-3. Open the tool from the Start menu. With no config yet, it offers the **setup wizard** (below),
-   which writes `C:\ProgramData\StigGpoManager\config.json`. The Start page then runs the pre-flight checks.
+1. Bring `StigGpoManager-Setup-<version>.exe` into the enclave through your approved transfer process.
+   Check it against the SHA-256 published with the release.
+2. Run it on the **PDC emulator** of each network (or a management server with RSAT). It installs to
+   `C:\Program Files\StigGpoManager`, adds a Start menu entry (plus a **demo** entry that runs on a
+   simulated domain), appears in **Programs and Features**, and optionally shows a status icon in the
+   notification area at logon ("Pilot - day 9 of 14").
+3. The first start opens the **setup wizard**. It detects the domain, PDC, OU tree, your
+   exception-GPO prefix (from existing GPO names), a pilot group, and one mapping per DISA GPO you
+   already have linked. Check each page and save. Nothing in AD is changed by setup.
 
-### Setup wizard
+The same setup file **upgrades** an installed copy, keeping the configuration, history and audit log.
+Uninstalling keeps them too (they are audit evidence). Silent install: `StigGpoManager-Setup-<version>.exe /VERYSILENT /TASKS=tray`.
 
-`StigGpoManager.exe /setup`, the *Setup wizard...* button on the Start page, or the first start with no
-config. Nothing about your domain is built into the exe or this repo; everything is detected on the
-machine or entered by you. The wizard **only reads** from AD:
+Requirements: Windows Server 2025 (DC or member with RSAT) or Windows 11 with RSAT; a member of
+**Domain Admins**, running elevated (the tool asks for elevation); an existing Central Store.
 
-1. **Domain:** detects the computer's domain, PDC emulator, domain controllers, OU tree and whether
-   the Central Store exists.
-2. **Naming and folders:** proposes the exception-GPO prefix from existing GPO names (prefixes whose
-   GPOs sit above DISA GPOs, or mention "exception", rank first), the DISA prefix, a pilot group (any
-   group with "pilot" in its name), and a working folder (`D:\StigGpoManager` if a D: drive exists).
-3. **GPO mappings:** one proposed row per DISA GPO family currently linked. The name pattern comes from
-   the GPO name with its version replaced by `{Version}`, production OUs from its enabled links, and
-   pilot OUs from a `Pilot` child OU. *Match* is suggested from the name: for example `MS` also matches
-   `Member Server`, `Comp` matches `Computer`, and `WinSvr2025` matches `WinSvr 2025`. **Load the DISA
-   package** to see which backup each row matches, which backups nothing matches (add a mapping for
-   them in one click), and pick OUs from the domain's OU list.
-4. **Review and save:** the exact `config.json` plus every validation problem; it saves only when there
-   are no errors. If a config already exists, it is backed up first. Re-running the wizard pre-fills
-   the current config and offers newly detected mappings unticked.
+The tool's own data (`WorkingFolder`) is ordinary files and does not replicate: include it in that
+server's backups, or point it at an admin-only share. On an accredited network, sign the exe and the
+setup file with your code-signing certificate if you have one, or add an AppLocker/WDAC hash rule.
 
-Scripted alternative: `StigGpoManager.exe cli detect [--save]` prints (or saves) the detected config.
+## Using it each quarter
 
-**Demo mode:** `StigGpoManager.exe /demo` opens the full GUI against a simulated domain with a sample
-quarterly run already in pilot (package, diff, exception findings, scan results, gate). It makes no
-AD or SYSVOL access and writes only to `%TEMP%\StigGpoManager-demo`. Use it for training or to try
-the tool without a lab. `/screenshots <folder>` runs the demo, saves a PNG of every screen and exits;
-CI uses it to produce the screenshots below.
+Nothing in Active Directory changes until you confirm it. Every change first opens a window that
+lists exactly what will happen, including the before/after link order on each OU. Promote and Delete
+also make you type `PROMOTE` / `DELETE`.
 
-`/install /quiet` and `/uninstall /quiet` skip the message boxes. Uninstall removes the program,
-shortcut, scheduled task and Programs-and-Features entry. It **keeps** the config and the whole
-`WorkingFolder` (runs, backups, reports, audit log), because those are audit evidence.
+**Home** shows the calendar, the **current update** with one **Continue** button, domain **health**,
+and the **history** of past updates (open, report, roll back, close). Click **New quarterly update**
+when DISA's package has been transferred in.
 
-**Tray icon:** a left-click or double-click opens the main window. Right-click shows the status of
-the active run, *Refresh status* and *Exit*. Closing the main window while the tray is running
-only hides it. The tray only reads run files; it never changes AD.
+| Stage | What you do | Changes AD? |
+|---|---|---|
+| **1. Prepare** | Drop the zip. The tool shows its SHA-256 (paste the expected hash to compare), lists every GPO in the package and the name each will get, e.g. `DoD WinSvr2025 MS STIG Comp v1r4`. Red rows match none of your mappings: pick one, or use *Use suggested mappings*. Click **Import**. | Backs up every GPO, updates the Central Store if newer templates are in the package (never downgrades), and creates the new GPOs. Never overwrites an existing GPO; links nothing. |
+| **2. Review** | Read the flagged rows; the full HTML/CSV report is saved. **Red**: a user right or restricted group that one of your exception GPOs replaces (its list must contain every STIG entry). **Yellow**: an exception that may need review or may no longer be needed. | No |
+| **3. Pilot** | Click **Start pilot**, then gpupdate and scan the pilot machines and test. Drop SCC / Evaluate-STIG results (CKL, CKLB, XCCDF) here: open findings that aren't in the exceptions register block Promote. The soak countdown runs; you can close the tool and come back. | Links the new GPOs to the pilot OUs (or at production, filtered to the pilot group), below your exception GPOs. |
+| **4. Promote** | Click **Promote to production** and type PROMOTE, then refresh policy on the listed computers. | Links the new GPOs to production, disables the old version's links (kept for rollback), removes pilot links. |
 
-## Configure (`config.json`)
+Next quarter, **Clean up old versions** (on Home) lists DISA GPOs two or more versions old with no
+enabled links. The newest and the one before it (your rollback) are always kept. Each one is backed up,
+then deleted.
 
-The setup wizard writes this file; you can also edit it by hand. The tool looks for the config at `/config <path>` if given, then
-`%ProgramData%\StigGpoManager\config.json`, then `config.json` next to the exe. It is validated
-on load, and every problem is listed on the Start page with a clear message: bad JSON with its
-line and column, single backslashes, invalid regexes, OUs outside the domain, a missing
-`{Version}`, and so on.
+**Tools** (top bar): **Exceptions**, the register of accepted deviations used by the scan gate
+(V-ID, justification, POA&M reference); **Audit log**; **Health**, with the pre-flight checks
+(modules, rights, PDC, Central Store, OUs, optional dcdiag) and the setup wizard.
 
-```json
-{
-  "Domain": "corp.example.com",
-  "TargetDC": "auto-pdc",
-  "ExceptionPrefix": "SITE - ",
-  "DisaGpoPrefix": "DoD ",
-  "WorkingFolder": "D:\\StigGpoManager",
-  "Language": "en-US",
-  "PilotGroup": "GPO-Pilot",
-  "WriteGpoComment": true,
-  "SoakDays": 14,
-  "RequireScanGate": true,
-  "Mappings": [
-    {
-      "Match": "WinSvr 2025.*Member Server.*Computer",
-      "NameTemplate": "DoD WinSvr2025 MS STIG Comp {Version}",
-      "PilotTargets": ["OU=Pilot,OU=Server2025,OU=Servers,OU=Computers,OU=ORG,DC=corp,DC=example,DC=com"],
-      "ProdTargets": ["OU=Server2025,OU=Servers,OU=Computers,OU=ORG,DC=corp,DC=example,DC=com"]
-    }
-  ]
-}
-```
+**Things to know**
+- **Matching uses the GPO names inside DISA's package**, not the computer you run on. DISA
+  abbreviates differently between products ("WinSvr 2025 MS STIG Comp" vs "Member Server ...
+  Computer"); mappings match either form.
+- **Exceptions inherited from a parent OU.** A GPO linked directly on a pilot OU beats GPOs inherited
+  from its parent, so during an OU-based pilot an exception linked only on the parent OU loses on pilot
+  machines. The tool warns about this. Link the exception to the pilot OU too, or use group-based pilot.
+- **Single-DC domains.** Changes to the Domain Controllers OU require confirming a fresh system-state backup.
+- Every screen can be tried on a simulated domain: Start menu > **STIG GPO Manager (demo)**, or `StigGpoManager.exe /demo`.
+
+<details>
+<summary>More screenshots</summary>
+
+| | |
+|---|---|
+| ![](docs/screenshots/02-prepare.png) 1. Prepare | ![](docs/screenshots/03-review.png) 2. Review |
+| ![](docs/screenshots/04-pilot.png) 3. Pilot (soak countdown, scan gate) | ![](docs/screenshots/05-promote.png) 4. Promote |
+| ![](docs/screenshots/06-confirm.png) Every change is shown before it happens | ![](docs/screenshots/09-setup-3.png) Setup wizard: detected mappings |
+| ![](docs/screenshots/07-setup-1.png) Setup: domain | ![](docs/screenshots/08-setup-2.png) Setup: naming and folders |
+| ![](docs/screenshots/11-exceptions.png) Exceptions register | ![](docs/screenshots/13-health.png) Health |
+| ![](docs/screenshots/12-audit-log.png) Audit log | ![](docs/screenshots/14-cleanup.png) Clean up old versions |
+
+Screenshots are taken automatically on a Windows build machine in demo mode (`/screenshots`).
+</details>
+
+## Rolling back
+
+**Roll back this update** (in the update) or **Roll back** (in History) uses what the tool recorded,
+not guesswork. Before the update first changed an OU, it saved that OU's link order. Rollback
+re-enables the old version's links first, so no OU is left without a STIG GPO, then disables the new
+version's links and restores the recorded order. Exception GPOs still stay on top. It works after
+Pilot or after Promote, and from the command line:
+`StigGpoManager.exe cli rollback --run <id> --whatif`, then `--yes`.
+
+Without the tool, the run report's *Link changes* table lists every OU with its link order before and
+after each change, so it can be undone by hand in GPMC.
+
+## Settings reference
+
+The setup wizard writes `%ProgramData%\StigGpoManager\config.json` (Administrators and SYSTEM only).
+You rarely need to edit it by hand; if you do, problems are listed under **Health** with their line and column.
 
 | Setting | Meaning |
 |---|---|
-| `Domain` | DNS name of the domain (detected). Every target DN must be inside it, so a production config cannot be run against the lab and vice versa. |
-| `TargetDC` | `auto-pdc` resolves the PDC emulator; otherwise give a DC FQDN. Every GroupPolicy/AD cmdlet gets `-Server` set to this DC so all changes land on one DC. |
-| `ExceptionPrefix` | Name prefix of site exception GPOs. These **always win**: they are kept above every DISA GPO on every OU. |
-| `DisaGpoPrefix` | Name prefix of DISA GPOs (used for ordering and cleanup). Must not overlap `ExceptionPrefix`. |
-| `WorkingFolder` | Where packages, backups, reports, run state and `audit.log` live. Local path or UNC. Double the backslashes. |
-| `Language` | ADML language folder copied to the Central Store (`en-US`). |
-| `PilotGroup` | Security group for group-based pilot (see `PilotMode`). |
-| `CentralStorePath` | Optional override of the Central Store path. |
-| `WriteGpoComment` | Write the source package, version, import date and run ID into the new GPO's comment. Default `true`. |
-| `SoakDays` | Planned soak length, shown in the tray (`Pilot - day 9 of 14`). Default 14. |
-| `RequireScanGate` | Phase 2: block Promote until pilot scan results are imported and pass. Default `true`; set `false` to make scan results optional (open findings still block if results are imported). |
+| `Domain` | DNS name of the domain. Every target OU must be inside it, so a lab config can't run against production. |
+| `TargetDC` | `auto-pdc` (default) sends every change to the PDC emulator; or a DC FQDN. |
+| `ExceptionPrefix` | Name prefix of your exception GPOs, e.g. `SITE - `. They always stay above DISA GPOs. |
+| `DisaGpoPrefix` | Name prefix of DISA GPOs, normally `DoD `. |
+| `WorkingFolder` | Run history, backups, reports, exceptions register and audit log. Local path or UNC. |
+| `Language` | ADML language copied to the Central Store, e.g. `en-US`. |
+| `PilotGroup` | Group for group-based pilot (mappings without pilot OUs). |
+| `SoakDays` | Pilot soak length shown on the calendar and tray. Default 14. |
+| `RequireScanGate` | Block Promote until pilot scan results pass. Default `true`. |
+| `WriteGpoComment` | Write package, version and import date into each new GPO's comment. Default `true`. |
+| `CentralStorePath` | Only if the Central Store isn't at `\\<domain>\SYSVOL\<domain>\Policies\PolicyDefinitions`. |
 
-**Mappings.** One per DISA GPO you deploy.
-
-| Field | Meaning |
-|---|---|
-| `Match` | Case-insensitive regex against the backup's GPO display name in `bkupInfo.xml`. The first matching mapping wins. |
-| `NameTemplate` | New GPO name. Must contain `{Version}` exactly once, e.g. `DoD WinSvr2025 MS STIG Comp {Version}` becomes `... v1r4`. The template also identifies older versions of the same GPO in AD. |
-| `PilotTargets` | OUs to link during pilot (OU-based pilot). |
-| `ProdTargets` | OUs to link at Promote. Required. |
-| `PilotMode` | Optional: `OU`, `Group` or `None`. Default: `OU` if `PilotTargets` is set, else `Group` if `PilotGroup` is set, else `None` (linked straight to production at Promote, with a warning). |
-| `Notes` | Free text. |
-
-`{Version}` is parsed (`v\d+r\d+`, case-insensitive) from the backup's display name, falling back
-to the product folder name. If neither has a version, the row is skipped until you type one in.
-
-Keys starting with `_` are treated as comments. Unknown keys produce a warning, which catches typos.
-
-## The quarterly procedure
-
-The tool handles the AD-side steps. Humans do the rest.
-
-| Phase | Who |
-|---|---|
-| Download the DISA package, record its hash, read the revision history | Human (connected network) |
-| Lab test of the new release | Human, **using this tool** against the lab domain |
-| Transfer into the enclave | Human (approved data transfer process) |
-| Central Store update, GPO import, review diff | **Tool** (steps 1-4) |
-| Pilot linking | **Tool** (step 5) |
-| Pilot scans, functional testing, 1-2 week soak | Human. The run is saved and survives closing the app and rebooting. |
-| Import scan results / gate | **Tool** (Scan results page) |
-| Promote, trigger policy refresh | **Tool** (step 6) |
-| Production scans and remediation | Human (SCC / Evaluate-STIG) |
-| SSP / POA&M paperwork | Human, supported by the run report and audit log |
-| Cleanup of old versions | **Tool** (step 8, following quarter) |
-
-Nothing touches AD until you click a **Push** button. Every Push first shows the exact changes,
-including the before and after link order on every OU, and asks for confirmation. **Promote**
-requires typing `PROMOTE` and **Delete** requires typing `DELETE`.
-
-**Start / pre-flight.** On launch the tool checks:
-- the GroupPolicy and ActiveDirectory modules
-- elevation and Domain Admins membership
-- that the PDC is reachable and is the domain in the config
-- that the Central Store exists, every target OU exists and the pilot group exists
-- that the working folder is writable
-- optionally, `dcdiag` SysVolCheck, DFSREvent, Advertising and Replications
-
-It also lists runs. If exactly one run is open it is resumed automatically.
-
-1. **Load package.** Drop the DISA zip on the window or browse to it. The SHA-256 is shown; paste the
-   expected hash to get MATCH / MISMATCH. The zip is extracted to `WorkingFolder\packages\<zip-name>`
-   (entries that would escape that folder are rejected) and scanned **by content**: every
-   `bkupInfo.xml` (GPO backups) and every `*.admx` and `<Language>\*.adml`, wherever they are.
-   The grid shows each backup's display name, detected version, Computer/User settings, matched
-   mapping and proposed GPO name. **Unmatched backups are red and skipped**; you can assign them a
-   mapping, or edit the version. This creates the run.
-2. **Central Store.** Each package template is compared with PolicyDefinitions. If the same file
-   appears more than once in the package, the newest wins. Status is *New*, *Updated*, *Unchanged*
-   (hash match) or *Skipped - store is newer*; the store is never downgraded unless you tick
-   *Override* for that file. Push zips the whole PolicyDefinitions folder to
-   `WorkingFolder\backups\` first, then copies the files and checks each hash.
-3. **Import.** Pre-flight `Backup-GPO -All` to `WorkingFolder\backups\gpo-<timestamp>`, then one
-   `Import-GPO -CreateIfNeeded` per selected backup into a **new** GPO with the templated name.
-   **If a GPO with that name already exists, the import stops**; nothing is ever imported over an
-   existing GPO. The source package, version and date are written into the GPO comment. No links are
-   created. The tool also records the previous version: same mapping, older version, preferably the
-   one currently linked.
-4. **Review / diff.** A setting-level diff of `Get-GPOReport -ReportType Xml` between the previous and
-   new version: **Added, Removed, Changed (old → new)**. It is cross-checked against every exception
-   GPO linked to the same OUs:
-   - *Exception may need review*: DISA changed a setting that an exception GPO overrides.
-   - *Exception may be unnecessary*: the exception's value now matches DISA's value.
-   - **REPLACEMENT-TYPE** (red): User Rights Assignment and Restricted Groups are *replaced, not
-     merged*, by the winning GPO. If DISA changed one that an exception also defines, the tool lists
-     the STIG entries **missing** from the exception's list.
-
-   It also warns when an exception GPO is linked only on a parent OU of a pilot OU (see
-   [Pilot caveat](#pilot-caveat-inherited-exceptions)). The grid can be filtered and searched;
-   HTML and CSV reports go to `WorkingFolder\reports\`.
-5. **Pilot.** Links each new GPO to its `PilotTargets` (OU-based). For group-based pilot it links at
-   the `ProdTargets` with security filtering: `PilotGroup` gets Apply and Authenticated Users drops
-   to Read. On every OU the new GPO goes **directly above the previous DISA version and below all
-   exception GPOs**. The order is then re-read and verified; if it is wrong, the tool fixes it and
-   reports what it did. A checklist reminds you to run gpupdate, SCC / Evaluate-STIG scans, persona
-   tests and the soak period. You can now close the app or reboot; the run is saved.
-6. **Promote.** Blocking pre-checks run first (the scan gate). Then, for each GPO: link it at every
-   `ProdTargets` OU with the same ordering rule, **disable (not remove)** the previous version's link
-   on that OU, and remove pilot-only links, or restore Authenticated Users Apply for a group-based
-   pilot. The order is verified on every target. You are then offered a policy refresh
-   (`Invoke-GPUpdate -Force -RandomDelayInMinutes 0` on every computer under the production OUs),
-   with success or failure shown per machine. Some settings still need a logoff or reboot.
-7. **Rollback**. See below.
-8. **Cleanup** (following quarter). Lists DISA GPOs that are **two or more versions** older than the
-   newest of their mapping and have no enabled links. The newest version and the one before it are
-   always kept, and GPOs referenced by open runs are protected. Each selected GPO is backed up with
-   `Backup-GPO`, re-checked, then deleted. Requires typing `DELETE`.
-
-Close a run from the Start page when the quarter is finished. It stays on disk and can still be reported on.
-
-**Single-DC domains:** if a change touches the `Domain Controllers` OU and the domain has only one
-DC, the confirmation shows a prominent warning and requires ticking *I confirm a fresh system-state
-backup was taken and verified*. That confirmation is stored in the run state and the audit log.
-
-### Pilot caveat: inherited exceptions
-
-GPOs linked **directly** on an OU beat GPOs **inherited** from parent OUs. If an exception GPO is
-linked on `OU=Server2025` and the new DISA GPO is linked on its child `OU=Pilot,OU=Server2025`, the
-DISA GPO wins on pilot machines during the pilot. The review and the pilot confirmation both warn
-about this. Either also link the exception GPO to the pilot OU (in GPMC) or use group-based pilot
-(`"PilotMode": "Group"`), which links at the production OU next to the exceptions.
-
-## Rollback
-
-Rollback is available after Pilot and after Promote, for selected GPOs or the whole run. It uses the
-run's **recorded** state, not guesswork. Before the run first changes an OU, the tool records the
-OU's full link order and enabled flags. Rollback then:
-
-1. **re-enables** the previous-version links that this run disabled, but only if they were enabled
-   in the recording; this is done first, so the OU is never without a STIG GPO
-2. **disables** (does not delete) the new version's links
-3. **restores the recorded link order**. New GPOs from other mappings that are not being rolled back
-   stay next to the GPO they sit above. Exception GPOs still end up on top.
-4. verifies the order and logs every change
-
-To roll back from the command line:
-`StigGpoManager.exe cli rollback --run <id> [--gpo "<name>"] --whatif` and then `--yes`.
-
-If the tool itself is unavailable, the manual fallback is the same: in GPMC, enable the old
-version's link and disable the new one on each OU listed in the run report's *Link changes* table,
-which records the order before and after each change.
-
-## Phase 2: scan results as a promotion gate
-
-- **Exceptions register** (`WorkingFolder\exceptions.json`, edited on the *Exceptions register*
-  page): V-ID, STIG/benchmark name (empty matches any STIG), exception GPO, **justification
-  (required)**, POA&M / risk-acceptance reference, date added and who added it. Each save keeps the
-  previous version in `exceptions-history\`.
-- **Import scan results** on the *Scan results* page: drop SCC / Evaluate-STIG output for pilot
-  machines (**CKL, CKLB, XCCDF results**). Each file is hashed and copied into
-  `WorkingFolder\runs\<runId>\scans\` as evidence. Per host and V-ID the worst status across files
-  counts (Open > Not_Reviewed > NotAFinding / Not_Applicable).
-- **Gate:** an open finding that is in the register is *expected*. **Any open finding not in the
-  register blocks Promote** until you fix it and re-import results, or add it to the register with a
-  justification (*Add selected findings to register...*). The panel shows PASS / FAIL.
-- **Before/after:** import results from before the pilot link as *Baseline* to see which V-IDs
-  changed status because of the new GPOs.
-- **Evidence:** the run report (Start page, *Run report*) includes the imported files and their
-  hashes, the gate outcome, blocking and expected findings, status changes, every link change with
-  before/after order, confirmations, backups and the run's audit entries.
+Each **mapping** says how a DISA GPO is named and linked: `Match` (regex on the GPO name in DISA's
+package), `NameTemplate` (new GPO name containing `{Version}`, e.g. `DoD WinSvr2025 MS STIG Comp {Version}`),
+`ProdTargets`, `PilotTargets`, and optionally `PilotMode` (`OU`, `Group` or `None`). See
+`config.sample.json` for a complete example. `StigGpoManager.exe cli detect [--save]` prints or saves
+a detected configuration.
 
 ## Where data lives
 
 ```
 %ProgramFiles%\StigGpoManager\StigGpoManager.exe
-%ProgramData%\StigGpoManager\config.json        (Administrators/SYSTEM only)
+%ProgramData%\StigGpoManager\config.json        Administrators/SYSTEM only
 <WorkingFolder>\
-  audit.log                 append-only, one JSON object per line
-  exceptions.json           exceptions register (+ exceptions-history\)
-  packages\<zip-name>\      extracted DISA packages
-  backups\                  PolicyDefinitions-*.zip, gpo-<ts>\ (Backup-GPO -All), deleted-<ts>\
-  reports\                  review-*.html/.csv, run-*.html
-  runs\<runId>.json         run state (written atomically; .bak keeps the previous copy)
+  audit.log                 append-only, one JSON object per line (who, what, target, result)
+  exceptions.json           exceptions register (previous versions in exceptions-history\)
+  runs\<runId>.json         one file per quarterly update: package hash, GPOs created, every link
+                            change with before/after order, confirmations, scan results, gate
   runs\<runId>\scans\       imported scan results (evidence)
+  packages\  backups\  reports\
 ```
 
-**Audit log:** every AD change and every important action (package load, Central Store copy,
-import, link changes, permission changes, gpupdate, deletes, confirmations, gate evaluations) is
-appended as `{"timestamp","user":"DOMAIN\\user","machine","runId","action","target","result","error","detail"}`.
-The file is only ever opened for append, never rewritten or truncated. The *Audit log* page shows it.
-
-**Run state** records the package name and hash, the selected backups, the created GPO names and
-GUIDs, the previous versions, every link created, enabled, disabled, removed or reordered (with the
-order before and after), the per-OU snapshots used for rollback, confirmations, backups, reports,
-scan imports and the gate result.
+The run report (**Report** in History) collects it all for the SSP / POA&M: package and hash, GPOs,
+every link change, confirmations, backups, scan evidence and gate outcome, and that update's audit entries.
 
 ## Command line
 
-The same exe is scriptable. Run it from an **elevated** console. Commands that change AD print their
-plan and act only with `--yes` (`--confirm PROMOTE` / `--confirm DELETE` for those two). `--whatif`
-prints the plan and never acts.
+Run from an elevated console. Commands that change AD print their plan and act only with `--yes`
+(or `--confirm PROMOTE` / `--confirm DELETE`); `--whatif` never acts.
 
 ```
+StigGpoManager.exe cli detect [--save]
 StigGpoManager.exe cli preflight [--dcdiag]
-StigGpoManager.exe cli load D:\in\U_STIG_GPO_Package_October_2026.zip --hash <sha256>
+StigGpoManager.exe cli load <zip> [--hash <sha256>]
 StigGpoManager.exe cli runs
-StigGpoManager.exe cli central-store --run <id> --whatif
+StigGpoManager.exe cli central-store --run <id> --yes
 StigGpoManager.exe cli import --run <id> --yes
 StigGpoManager.exe cli review --run <id>
-StigGpoManager.exe cli pilot --run <id> --yes [--confirm-dc-backup]
-StigGpoManager.exe cli import-scan --run <id> --stage Pilot D:\scans\*.cklb
-StigGpoManager.exe cli gate --run <id>
+StigGpoManager.exe cli pilot --run <id> --yes
+StigGpoManager.exe cli import-scan --run <id> --stage Pilot <files>
 StigGpoManager.exe cli promote --run <id> --confirm PROMOTE
 StigGpoManager.exe cli refresh --run <id> --yes
 StigGpoManager.exe cli rollback --run <id> [--gpo "<name>"] --yes
@@ -377,70 +180,43 @@ StigGpoManager.exe cli cleanup [--delete "<name>" ... --confirm DELETE]
 StigGpoManager.exe cli report --run <id>
 ```
 
-Exit codes: 0 success, 1 error, 2 blocked or confirmation required. The CLI imports every matched
-backup; use the GUI to skip or reassign individual backups.
+## How link order is decided
 
-## How it decides link order
-
-Link order 1 has the highest precedence.
-
-- On every OU, **every exception GPO is above every DISA GPO**. An exception found below a DISA GPO is
-  moved up, directly above the first DISA GPO, keeping the exceptions' relative order, and the move
-  is reported.
-- A new DISA version goes **directly above the previous version** of the same mapping on that OU. If
-  there is no previous version on the OU, it goes directly below the last exception GPO.
-- All other links keep their relative order.
-- An Enforced DISA link is reported, because enforcement would let it beat exception GPOs on child OUs.
-- Moves are made with the minimum number of `Set-GPLink -Order` calls. The order is re-read after
-  every change and verified at the end.
+On every OU, **every exception GPO is above every DISA GPO**. An exception found below a DISA GPO is
+moved up and the move is reported. A new DISA version goes **directly above its previous version**; if
+there is none on that OU, directly below the last exception GPO. Other links keep their order. The
+order is re-read after every change and verified, and an Enforced DISA link is reported.
 
 ## Building from source
 
-The tool must be built on a **connected** machine (NuGet supplies build-time reference assemblies
-only). Copy only the resulting exe into the enclave.
+On a connected machine with the .NET 8 SDK (NuGet supplies build-time reference assemblies only):
 
-- Windows: install the .NET 8 SDK and run `.\build.ps1`
-- Linux/macOS: install the Microsoft .NET 8 SDK (not the distro package, which lacks the WindowsDesktop
-  SDK) and run `./build.sh`
-
-Both run the unit tests, build `src/App` for `net48`, and write `dist\StigGpoManager.exe` plus its
-SHA-256.
-
-**Releases:** GitHub Actions (`.github/workflows/build.yml`) builds and tests on Windows on every push
-and keeps the exe as a run artifact. Pushing a tag such as `v1.0.0`, or running the workflow by hand (Actions → Build and release →
-Run workflow) with a `release_tag`, creates a **draft pre-release** with
-`StigGpoManager.exe`, `StigGpoManager.exe.sha256` and `config.sample.json` attached; review it and publish
-it from the repository's Releases page. The version comes from the tag.
+- `.\build.ps1` (Windows) or `./build.sh` (Linux/macOS, Microsoft's SDK build): runs the tests and
+  builds `dist\StigGpoManager.exe`.
+- The installer is built with [Inno Setup 6](https://jrsoftware.org/isinfo.php):
+  `ISCC.exe /DAppVersion=1.0.0 /DAppVersionNum=1.0.0.0 packaging\installer\StigGpoManager.iss`.
+- GitHub Actions does all of this on every push: unit tests on Windows, the exe, the installer, a
+  silent install / upgrade / uninstall test, a launch check and the screenshots. Running the workflow
+  by hand with a `release_tag` creates a draft release.
 
 ```
-src/Core/   AD-independent logic: config, version parsing, package discovery, mapping, Central
-            Store compare, GPO report parsing and diff, exception cross-check, link ordering, run
-            state, audit log, reports, scan parsers and gate, and the workflow engine (StigEngine)
-            over the IGpoDirectory interface
-src/App/    The exe: PowerShellDirectory (the only code that calls GroupPolicy/AD cmdlets),
-            WPF GUI, tray icon, installer, CLI
-tests/      xUnit tests. They compile the same src/Core files and run the whole quarterly cycle
-            (import, review, pilot, gate, promote, refresh, rollback, cleanup) against an in-memory
-            fake AD with GPMC link-order semantics.
+src/Core/   all logic, no UI: package discovery, mapping, Central Store, GPO report diff, exception
+            cross-check, link ordering, run state, audit log, scan parsers and gate, setup detection,
+            quarterly calendar, and the workflow engine over the IGpoDirectory interface
+src/App/    the exe: PowerShell gateway (the only code that calls GroupPolicy/AD cmdlets), WPF UI,
+            setup wizard, tray, CLI, demo data
+tests/      xUnit tests (78), including whole quarterly cycles against an in-memory AD
+packaging/  Inno Setup script
 ```
 
-## Design and limits
+## Status and limits
 
-- **Separation:** all logic is in `src/Core` and talks to AD only through `IGpoDirectory`. Every
-  operation that changes AD has a read-only `Plan*` counterpart, which drives the confirmation
-  dialogs and the CLI's `--whatif`. Long operations run off the UI thread, and log lines (including
-  each cmdlet invoked) stream to the log pane.
-- **DISA GPOs are never edited.** The tool only creates new GPOs from backups, links them, reorders
-  them, enables and disables links, sets security filtering for group pilot, and deletes old versions
-  in Cleanup. It never creates or edits exception GPOs.
-- **No network access** outside the domain. Reports are self-contained HTML.
-- **Not yet verified against a real domain.** The core logic and the full workflow are unit-tested
-  against a fake AD, and the exe is built and checked to reference only in-box assemblies. The
-  PowerShell gateway (`src/App/PowerShellDirectory.cs`), the WPF UI, the tray and the installer have
-  not been run on Windows yet. Run the whole quarterly cycle in the lab domain first, including
-  rollback and cleanup, and check the audit log and run report.
-- The diff understands security settings (account policy, user rights, security options, restricted
-  groups, services, audit), Administrative Templates, advanced audit and registry settings. Other
-  extensions (firewall, preferences, ...) are compared leaf by leaf, so changes are still shown,
-  with less friendly names.
-- For a GPO linked to OUs in other domains or sites the tool only manages the OUs in `config.json`.
+- **Not yet run against a real domain.** The logic and full quarterly cycles are tested against a
+  simulated AD, and the exe and installer are built and exercised on Windows. The PowerShell/AD path
+  needs a full lab quarter first: prepare, pilot, promote, roll back and clean up, then check the audit log.
+- The review understands security settings (account policy, user rights, security options, restricted
+  groups, services, audit), Administrative Templates, advanced audit and registry settings; other
+  extensions (firewall, preferences) are compared item by item.
+- DISA GPOs are never edited, and exception GPOs are never created or changed. The tool creates new
+  GPOs from DISA's backups, links, orders, enables and disables them, sets security filtering for group
+  pilots, and deletes old versions only when you ask.
