@@ -1,0 +1,29 @@
+# Publishes an existing draft release (creates its tag). Run by hand: Actions -> Publish release.
+name: Publish release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag of the draft release to publish (e.g. v1.0.0-beta.1)'
+        required: true
+      prerelease:
+        description: 'Keep it marked as a pre-release'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag }}
+          PRE: ${{ github.event.inputs.prerelease }}
+        run: |
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --prerelease="$PRE"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY"
