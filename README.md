@@ -345,7 +345,8 @@ Both run the unit tests, build `src/App` for `net48`, and write `dist\StigGpoMan
 SHA-256.
 
 **Releases:** GitHub Actions (`.github/workflows/build.yml`) builds and tests on Windows on every push
-and keeps the exe as a run artifact. Pushing a tag such as `v1.0.0` creates a **draft pre-release** with
+and keeps the exe as a run artifact. Pushing a tag such as `v1.0.0`, or running the workflow by hand (Actions → Build and release →
+Run workflow) with a `release_tag`, creates a **draft pre-release** with
 `StigGpoManager.exe`, `StigGpoManager.exe.sha256` and `config.sample.json` attached; review it and publish
 it from the repository's Releases page. The version comes from the tag.
 
