@@ -162,6 +162,15 @@ namespace StigGpoManager.Tests
 
                 // re-extracting the same zip reuses the folder
                 Assert.Equal(dest, PackageScanner.Extract(zip, tmp.Sub("packages"), hash));
+                // A leftover folder of that name (earlier attempt cut short: no marker) is replaced, not an error.
+                File.Delete(Path.Combine(dest, ".stiggpomanager-source.sha256"));
+                File.WriteAllText(Path.Combine(dest, "junk.txt"), "half extracted");
+                Directory.CreateDirectory(dest + ".partial");
+                Assert.Equal(dest, PackageScanner.Extract(zip, tmp.Sub("packages"), hash));
+                Assert.False(File.Exists(Path.Combine(dest, "junk.txt")));
+                Assert.False(Directory.Exists(dest + ".partial"));
+                Assert.True(PackageScanner.Scan(dest, "en-US").Backups.Count > 0);
+                Assert.True(Path.GetFileName(dest).Length <= 33, Path.GetFileName(dest));
             }
         }
 
@@ -174,6 +183,7 @@ namespace StigGpoManager.Tests
                 using (var z = System.IO.Compression.ZipFile.Open(zip, System.IO.Compression.ZipArchiveMode.Create))
                 using (var w = new StreamWriter(z.CreateEntry("../../escape.txt").Open())) w.Write("x");
                 Assert.Throws<InvalidDataException>(() => PackageScanner.Extract(zip, tmp.Sub("packages"), PackageScanner.ComputeSha256(zip)));
+                Assert.Empty(Directory.GetDirectories(tmp.Sub("packages"))); // nothing half-extracted left behind
             }
         }
 

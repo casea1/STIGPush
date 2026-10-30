@@ -88,14 +88,15 @@ namespace StigGpoManager.Core
             new string((hash ?? "").Where(Uri.IsHexDigit).ToArray()).ToUpperInvariant();
 
         /// <summary>
-        /// Extracts the zip to packagesFolder\&lt;zip-name&gt;. If that folder already holds the same zip
-        /// (by hash) it is reused; if it holds a different zip, a hash-suffixed folder is used instead.
+        /// Extracts the zip to packagesFolder\&lt;short-name&gt;-&lt;hash8&gt;. The folder name carries the package hash,
+        /// so a folder of that name holding a different (or half-extracted) package can only be a leftover from an
+        /// earlier attempt of ours: it is replaced, never a reason to stop. Extraction goes to a ".partial" folder
+        /// first and is moved into place only when complete, so an interrupted extraction never looks finished.
         /// Entries that would escape the destination are rejected. Nested zips are expanded one level.
         /// </summary>
         public static string Extract(string zipPath, string packagesFolder, string sha256, Action<string> log = null)
         {
-            var name = Path.GetFileNameWithoutExtension(zipPath);
-            var dest = Path.Combine(packagesFolder, name);
+            var dest = Path.Combine(packagesFolder, FolderNameFor(zipPath, sha256));
             var marker = Path.Combine(dest, ".stiggpomanager-source.sha256");
             if (Directory.Exists(dest))
             {
@@ -104,28 +105,62 @@ namespace StigGpoManager.Core
                     log?.Invoke($"Package already extracted at {dest} (hash matches); reusing.");
                     return dest;
                 }
-                dest = Path.Combine(packagesFolder, name + "-" + sha256.Substring(0, 8));
-                marker = Path.Combine(dest, ".stiggpomanager-source.sha256");
-                if (Directory.Exists(dest) && File.Exists(marker) && string.Equals(File.ReadAllText(marker).Trim(), sha256, StringComparison.OrdinalIgnoreCase))
-                    return dest;
-                if (Directory.Exists(dest))
-                    throw new IOException($"Extraction folder {dest} exists but does not contain this package. Move it aside and retry.");
+                log?.Invoke($"Removing an incomplete earlier extraction at {dest} ...");
+                DeleteTree(dest);
             }
-            Directory.CreateDirectory(dest);
+            var partial = dest + ".partial";
+            if (Directory.Exists(partial)) DeleteTree(partial);
+            Directory.CreateDirectory(packagesFolder);
             log?.Invoke($"Extracting {Path.GetFileName(zipPath)} to {dest} ...");
-            ExtractSafe(zipPath, dest);
-
-            // DISA occasionally nests zips; expand one level so discovery can see them.
-            foreach (var inner in Directory.GetFiles(dest, "*.zip", SearchOption.AllDirectories))
+            try
             {
-                var innerDest = Path.Combine(Path.GetDirectoryName(inner), Path.GetFileNameWithoutExtension(inner));
-                if (Directory.Exists(innerDest)) continue;
-                log?.Invoke($"Expanding nested archive {inner.Substring(dest.Length).TrimStart('\\', '/')}");
-                Directory.CreateDirectory(innerDest);
-                ExtractSafe(inner, innerDest);
+                Directory.CreateDirectory(partial);
+                ExtractSafe(zipPath, partial);
+
+                // DISA occasionally nests zips; expand one level so discovery can see them.
+                foreach (var inner in Directory.GetFiles(partial, "*.zip", SearchOption.AllDirectories))
+                {
+                    var innerDest = Path.Combine(Path.GetDirectoryName(inner), Path.GetFileNameWithoutExtension(inner));
+                    if (Directory.Exists(innerDest)) continue;
+                    log?.Invoke($"Expanding nested archive {inner.Substring(partial.Length).TrimStart('\\', '/')}");
+                    Directory.CreateDirectory(innerDest);
+                    ExtractSafe(inner, innerDest);
+                }
+                File.WriteAllText(Path.Combine(partial, ".stiggpomanager-source.sha256"), sha256);
+                Directory.Move(partial, dest);
             }
-            File.WriteAllText(marker, sha256);
+            catch (Exception ex)
+            {
+                try { DeleteTree(partial); } catch { /* best effort; replaced on the next attempt */ }
+                if (ex is InvalidDataException) throw;
+                throw new IOException($"Could not extract {Path.GetFileName(zipPath)} to {packagesFolder}: {ex.Message}", ex);
+            }
             return dest;
+        }
+
+        /// <summary>"U_STIG_GPO_Package_October_2026.zip" -&gt; "U_STIG_GPO_Package_Octob-C8A093C0": short, so DISA's deep
+        /// folder structure stays well under the 260-character path limit GPMC and older tools still have.</summary>
+        public static string FolderNameFor(string zipPath, string sha256)
+        {
+            var name = new string(Path.GetFileNameWithoutExtension(zipPath).Select(ch => char.IsLetterOrDigit(ch) || ch == '_' || ch == '-' ? ch : '_').ToArray()).Trim('_');
+            if (name.Length > 24) name = name.Substring(0, 24).TrimEnd('_', '-');
+            if (name.Length == 0) name = "package";
+            return name + "-" + NormalizeHash(sha256).PadRight(8, '0').Substring(0, 8);
+        }
+
+        public static void DeleteTree(string path)
+        {
+            if (!Directory.Exists(LongPath(path))) return;
+            foreach (var f in Directory.GetFiles(LongPath(path), "*", SearchOption.AllDirectories))
+                File.SetAttributes(f, FileAttributes.Normal); // read-only files in DISA packages would block the delete
+            Directory.Delete(LongPath(path), true);
+        }
+
+        /// <summary>On Windows, the \\?\ form lets .NET Framework write paths longer than 260 characters.</summary>
+        private static string LongPath(string fullPath)
+        {
+            if (Path.DirectorySeparatorChar != '\\' || fullPath.Length < 240 || fullPath.StartsWith(@"\\?\")) return fullPath;
+            return fullPath.StartsWith(@"\\") ? @"\\?\UNC\" + fullPath.Substring(2) : @"\\?\" + fullPath;
         }
 
         private static void ExtractSafe(string zipPath, string dest)
@@ -139,10 +174,12 @@ namespace StigGpoManager.Core
                     var target = Path.GetFullPath(Path.Combine(dest, relative.Replace('/', Path.DirectorySeparatorChar)));
                     if (!target.StartsWith(root, StringComparison.OrdinalIgnoreCase))
                         throw new InvalidDataException($"Zip entry '{entry.FullName}' would extract outside the package folder; the package is rejected.");
-                    if (relative.EndsWith("/")) { Directory.CreateDirectory(target); continue; }
-                    Directory.CreateDirectory(Path.GetDirectoryName(target));
-                    entry.ExtractToFile(target, true);
-                    try { File.SetLastWriteTime(target, entry.LastWriteTime.DateTime); } catch (IOException) { } catch (ArgumentOutOfRangeException) { }
+                    if (relative.EndsWith("/")) { Directory.CreateDirectory(LongPath(target)); continue; }
+                    Directory.CreateDirectory(LongPath(Path.GetDirectoryName(target)));
+                    var path = LongPath(target);
+                    if (File.Exists(path)) File.SetAttributes(path, FileAttributes.Normal);
+                    entry.ExtractToFile(path, true);
+                    try { File.SetLastWriteTime(path, entry.LastWriteTime.DateTime); } catch (IOException) { } catch (ArgumentOutOfRangeException) { }
                 }
             }
         }

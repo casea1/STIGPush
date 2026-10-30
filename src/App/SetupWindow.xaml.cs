@@ -229,9 +229,12 @@ namespace StigGpoManager
                 var lang = LanguageBox.Text;
                 _backupNames = await Task.Run(() =>
                 {
-                    var folder = Path.Combine(Path.GetTempPath(), "StigGpoManager-setup");
+                    // Short folder (DISA's folders are deep) and removed afterwards: the wizard only needs the backup names.
+                    var folder = Path.Combine(Installer.DataDir, "setup-preview");
+                    try { var old = Path.Combine(Path.GetTempPath(), "StigGpoManager-setup"); if (Directory.Exists(old)) Directory.Delete(old, true); } catch { }
                     var extracted = PackageScanner.Extract(zip, folder, PackageScanner.ComputeSha256(zip));
-                    return PackageScanner.Scan(extracted, lang).Backups.Select(b => b.DisplayName).OrderBy(n => n).ToList();
+                    try { return PackageScanner.Scan(extracted, lang).Backups.Select(b => b.DisplayName).OrderBy(n => n).ToList(); }
+                    finally { try { PackageScanner.DeleteTree(folder); } catch { } }
                 });
                 PackageText.Text = $"Package {Path.GetFileName(zip)}: {_backupNames.Count} GPO backups.";
                 Recompute();
