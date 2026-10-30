@@ -24,7 +24,19 @@ namespace StigGpoManager
         public static string DataDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), AppKey);
         public static string DefaultConfigPath => Path.Combine(DataDir, "config.json");
         public static string CurrentExe => Assembly.GetExecutingAssembly().Location;
-        public static string Version => Assembly.GetExecutingAssembly().GetName().Version.ToString(3);
+        /// <summary>The release version, e.g. "1.0.0-beta.3" (InformationalVersion; the file version only has numbers).</summary>
+        public static string Version
+        {
+            get
+            {
+                var asm = Assembly.GetExecutingAssembly();
+                var info = (AssemblyInformationalVersionAttribute)Attribute.GetCustomAttribute(asm, typeof(AssemblyInformationalVersionAttribute));
+                var v = info?.InformationalVersion;
+                if (string.IsNullOrWhiteSpace(v)) return asm.GetName().Version.ToString(3);
+                var plus = v.IndexOf('+');
+                return plus > 0 ? v.Substring(0, plus) : v;
+            }
+        }
 
         public static void PostInstall()
         {

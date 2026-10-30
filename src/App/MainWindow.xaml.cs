@@ -43,10 +43,12 @@ namespace StigGpoManager
             _session = session;
             LogList.ItemsSource = _log;
             RegisterGrid.ItemsSource = _register;
+            VersionText.Text = "v" + Installer.Version;
+            Title = "STIG GPO Manager " + Installer.Version;
             Calendar.RowClicked += id => OpenRun(id);
             if (session.IsDemo)
             {
-                Title = "STIG GPO Manager - DEMO (simulated domain, no AD changes)";
+                Title = "STIG GPO Manager " + Installer.Version + " - DEMO (simulated domain, no AD changes)";
                 HeaderBorder.Background = new SolidColorBrush(Color.FromRgb(0x92, 0x40, 0x0E));
                 session.Engine.Log += AddLog;
             }

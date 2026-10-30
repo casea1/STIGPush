@@ -25,6 +25,25 @@ namespace StigGpoManager
 
         [DllImport("kernel32.dll")] private static extern bool AttachConsole(int pid);
         [DllImport("kernel32.dll")] private static extern bool AllocConsole();
+        [DllImport("kernel32.dll")] private static extern IntPtr GetStdHandle(int nStdHandle);
+        [DllImport("kernel32.dll")] private static extern int GetFileType(IntPtr hFile);
+        private const int StdOutputHandle = -11;
+
+        /// <summary>
+        /// The exe is a Windows (GUI) program, so "cli" has to find somewhere to write:
+        ///  - stdout already redirected (WinRM / Invoke-Command, "| Out-String", "> file", CI): use it as is.
+        ///    Calling AllocConsole here would replace the pipe with an invisible console and every line
+        ///    would be lost (the WinRM "no output" report).
+        ///  - started from a console window (cmd, PowerShell): attach to that console.
+        ///  - neither, interactive desktop: open a console window. Never in a non-interactive session.
+        /// </summary>
+        private static void SetUpConsole()
+        {
+            var h = GetStdHandle(StdOutputHandle);
+            if (h != IntPtr.Zero && h != new IntPtr(-1) && GetFileType(h) != 0) return;
+            if (AttachConsole(-1)) return;
+            if (Environment.UserInteractive) AllocConsole();
+        }
 
         [STAThread]
         public static int Main(string[] args)
@@ -37,9 +56,16 @@ namespace StigGpoManager
             {
                 if (args.Length > 0 && string.Equals(args[0], "cli", StringComparison.OrdinalIgnoreCase))
                 {
-                    if (!AttachConsole(-1)) AllocConsole();
-                    Console.WriteLine();
-                    return Cli.Run(args.Skip(1).ToArray(), configPath);
+                    SetUpConsole();
+                    try { return Cli.Run(args.Skip(1).ToArray(), configPath); }
+                    catch (Exception ex)
+                    {
+                        // Never a message box from the command line: in a WinRM / scheduled-task session nobody
+                        // can see it, and the process would wait for a click forever.
+                        Console.Error.WriteLine("ERROR: " + ex.Message);
+                        return 1;
+                    }
+                    finally { Console.Out.Flush(); Console.Error.Flush(); }
                 }
                 if (Has("/postinstall")) { Installer.PostInstall(); return 0; }
                 if (Has("/register-tray")) { Installer.RegisterTray(); return 0; }
@@ -47,7 +73,7 @@ namespace StigGpoManager
             }
             catch (Exception ex)
             {
-                if (!quiet) MessageBox.Show(ex.Message, "STIG GPO Manager", MessageBoxButton.OK, MessageBoxImage.Error);
+                if (!quiet && Environment.UserInteractive) MessageBox.Show(ex.Message, "STIG GPO Manager", MessageBoxButton.OK, MessageBoxImage.Error);
                 Console.Error.WriteLine(ex.Message);
                 return 1;
             }

@@ -33,6 +33,10 @@ Usage: StigGpoManager.exe cli <command> [options] [--config path]
   report --run <id>                    Write the run report
   close --run <id>                     Mark a run closed
   sample-config                        Print a sample config.json
+  version                              Print the version
+
+In PowerShell, pipe the output, e.g.  & .\StigGpoManager.exe cli preflight | Out-Host  so the
+shell waits for the exe and sets $LASTEXITCODE; this also works over WinRM / Invoke-Command.
 
 Exit codes: 0 success, 1 error, 2 blocked / confirmation required.";
 
@@ -63,6 +67,7 @@ Exit codes: 0 success, 1 error, 2 blocked / confirmation required.";
 
         public static int Run(string[] args, string configPath)
         {
+            if (args.Length > 0 && (args[0] == "--version" || args[0] == "version")) { Console.WriteLine(Installer.Version); return 0; }
             if (args.Length == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "/?")
             {
                 Console.WriteLine(Usage);
@@ -94,7 +99,15 @@ Exit codes: 0 success, 1 error, 2 blocked / confirmation required.";
             using (var session = new Session(Program.ResolveConfigPath(configPath ?? Opt("--config"))))
             {
                 foreach (var i in session.Issues) Console.WriteLine(i);
-                if (!session.ConfigValid) { Console.WriteLine($"Config {session.ConfigPath} is not valid."); return 1; }
+                if (!session.ConfigValid)
+                {
+                    Console.WriteLine(System.IO.File.Exists(session.ConfigPath)
+                        ? $"Config {session.ConfigPath} is not valid; fix the errors above."
+                        : $"No config file at {session.ConfigPath}. Create one with the setup wizard (StigGpoManager.exe /setup) or 'StigGpoManager.exe cli detect --save', or pass --config <path>.");
+                    return 1;
+                }
+                Console.WriteLine($"STIG GPO Manager {Installer.Version} - config {session.ConfigPath}");
+                Console.WriteLine($"Connecting to {session.Config.Domain} (checking PowerShell modules, finding the PDC) ...");
                 try
                 {
                     session.Connect((lvl, m) => Console.WriteLine($"[{lvl}] {m}"), whatIf ? null : (Action<string>)(c => Console.WriteLine("    " + c)));

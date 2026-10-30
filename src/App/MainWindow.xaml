@@ -49,6 +49,7 @@
                 <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
                     <Image Source="Resources/app.ico" Width="24" Height="24" Margin="0,0,10,0"/>
                     <TextBlock Text="STIG GPO Manager" Foreground="White" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <TextBlock x:Name="VersionText" Foreground="#FF94A3B8" FontSize="11" Margin="8,4,0,0" VerticalAlignment="Center"/>
                     <TextBlock x:Name="HeaderText" Foreground="#FF94A3B8" Margin="18,0,0,0" VerticalAlignment="Center"/>
                 </StackPanel>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">

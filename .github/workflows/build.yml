@@ -34,14 +34,24 @@ jobs:
           $tag = if ($env:INPUT_TAG) { $env:INPUT_TAG } elseif ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { '' }
           if ($tag -and $tag -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') { throw "Tag '$tag' must look like v1.2.3 or v1.2.3-beta.1" }
           $v = if ($tag) { $tag.TrimStart('v') } else { '1.0.0-ci.' + $env:GITHUB_RUN_NUMBER }
+          $num = ($v -replace '-.*$','') + '.' + $env:GITHUB_RUN_NUMBER
           "VERSION=$v" | Out-File -Append $env:GITHUB_ENV
-          Write-Host "Version $v"
+          "VERSIONNUM=$num" | Out-File -Append $env:GITHUB_ENV
+          Write-Host "Version $v (file version $num)"
 
       - name: Unit tests
         run: dotnet test tests/StigGpoManager.Tests/StigGpoManager.Tests.csproj -c Release
 
       - name: Build exe
-        run: dotnet build src/App/StigGpoManager.csproj -c Release -p:Version=${{ env.VERSION }}
+        run: dotnet build src/App/StigGpoManager.csproj -c Release -p:Version=${{ env.VERSION }} -p:FileVersion=${{ env.VERSIONNUM }}
+
+      - name: Check version stamp
+        shell: pwsh
+        run: |
+          $vi = (Get-Item src/App/bin/Release/net48/StigGpoManager.exe).VersionInfo
+          Write-Host "FileVersion $($vi.FileVersion)  ProductVersion $($vi.ProductVersion)"
+          if ($vi.ProductVersion -ne $env:VERSION) { throw "ProductVersion $($vi.ProductVersion) is not $env:VERSION" }
+          if ($vi.FileVersion -ne $env:VERSIONNUM) { throw "FileVersion $($vi.FileVersion) is not $env:VERSIONNUM" }
 
       - name: Package
         shell: pwsh
@@ -58,8 +68,7 @@ jobs:
         run: |
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y | Out-Null }
-          $num = ($env:VERSION -replace '-.*$','') + '.' + $env:GITHUB_RUN_NUMBER
-          & $iscc /Q "/DAppVersion=$env:VERSION" "/DAppVersionNum=$num" packaging\installer\StigGpoManager.iss
+          & $iscc /Q "/DAppVersion=$env:VERSION" "/DAppVersionNum=$env:VERSIONNUM" packaging\installer\StigGpoManager.iss
           if ($LASTEXITCODE) { throw "ISCC failed ($LASTEXITCODE)" }
           $setup = Get-ChildItem dist\StigGpoManager-Setup-*.exe | Select-Object -First 1
           $h = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash
@@ -97,6 +106,39 @@ jobs:
         run: |
           $p = Start-Process -FilePath dist/StigGpoManager.exe -ArgumentList 'cli', 'sample-config' -Wait -PassThru -WindowStyle Hidden
           if ($p.ExitCode -ne 0) { throw "StigGpoManager.exe cli sample-config exited with $($p.ExitCode)" }
+
+      - name: CLI test (no config fails fast; output reaches redirected stdout and WinRM)
+        shell: powershell
+        timeout-minutes: 6
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path dist\StigGpoManager.exe).Path
+          $missing = Join-Path $env:RUNNER_TEMP 'no-such-config.json'
+          $v = (& $exe cli version | Out-String).Trim()
+          if ($v -ne $env:VERSION) { throw "cli version printed '$v', expected $env:VERSION" }
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          $out = & $exe cli preflight --config $missing | Out-String
+          $code = $LASTEXITCODE
+          Write-Host $out
+          if ($code -ne 1) { throw "cli preflight without a config exited $code, expected 1" }
+          if ($out -notmatch 'No config file') { throw 'cli preflight without a config did not say why' }
+          if ($sw.Elapsed.TotalSeconds -gt 60) { throw "cli preflight without a config took $([int]$sw.Elapsed.TotalSeconds)s" }
+          Write-Host "Local: exit $code in $([int]$sw.Elapsed.TotalSeconds)s"
+          try { Enable-PSRemoting -Force -SkipNetworkProfileCheck | Out-Null }
+          catch { Write-Warning "WinRM not available on this runner ($($_.Exception.Message)); WinRM case skipped."; exit 0 }
+          $job = Invoke-Command -ComputerName localhost -AsJob -ArgumentList $exe, $missing -ScriptBlock {
+            param($e, $c)
+            $o = & $e cli preflight --config $c | Out-String
+            [pscustomobject]@{ Out = $o; Code = $LASTEXITCODE }
+          }
+          if (-not (Wait-Job $job -Timeout 180)) { Stop-Job $job; throw 'cli preflight over WinRM did not finish within 180 s (hang)' }
+          $r = Receive-Job $job -ErrorAction Continue
+          if ($job.State -eq 'Failed' -or -not $r) { Write-Warning "WinRM session could not be opened on this runner: $($job.ChildJobs[0].JobStateInfo.Reason)"; exit 0 }
+          Write-Host "WinRM output:`n$($r.Out)"
+          if ($r.Code -ne 1) { throw "over WinRM: exit $($r.Code), expected 1" }
+          if ($r.Out -notmatch 'No config file') { throw 'over WinRM: the message did not reach the remote session' }
+          Write-Host 'CLI over WinRM OK'
+          exit 0
 
       - name: Screenshots (demo mode, simulated domain)
         shell: pwsh
@@ -139,17 +181,22 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.inputs.release_tag || github.ref_name }}
         run: |
-          hash=$(cut -d' ' -f1 dist/StigGpoManager.exe.sha256)
-          cat > notes.md <<NOTES
-          Single-file STIG GPO Manager for Windows Server 2025 / Windows 11 (.NET Framework 4.8, in-box).
-
-          **StigGpoManager.exe SHA-256:** \`${hash}\`
-
-          Record this hash for the transfer into the enclave. Install with \`StigGpoManager.exe /install\`, then edit
-          \`C:\\ProgramData\\StigGpoManager\\config.json\`. See README.md.
-
-          **Pre-release:** not yet validated against a domain. Test the full quarterly cycle in the lab domain before production use.
-          NOTES
+          {
+            echo "Single-file STIG GPO Manager for Windows Server 2025 / Windows 11 (.NET Framework 4.8, in-box)."
+            echo
+            echo "Install with \`StigGpoManager-Setup-${TAG#v}.exe\` (Programs and Features, Start menu, tray icon), or run the portable \`StigGpoManager.exe\`. See README.md."
+            echo
+            echo "**SHA-256** (record these for the transfer into the enclave):"
+            echo
+            echo '```'
+            cat dist/StigGpoManager.exe.sha256
+            echo '```'
+            echo
+            echo "Installed builds show the version in the window title and in the exe's Properties > Details (Product version ${TAG#v})."
+            echo
+            echo "**Pre-release:** not yet validated against a production domain. Test the full quarterly cycle in the lab domain first."
+          } > notes.md
+          cat notes.md
           # --target creates the tag at the built commit when it does not exist yet (manual run).
           gh release create "$TAG" dist/* \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --prerelease \

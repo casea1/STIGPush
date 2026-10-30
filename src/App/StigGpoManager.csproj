@@ -15,7 +15,10 @@
     <RootNamespace>StigGpoManager</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Resources\app.ico</ApplicationIcon>
-    <Version>1.0.0</Version>
+    <!-- CI passes -p:Version=1.0.0-beta.3 -p:FileVersion=1.0.0.<run>: Explorer shows the FileVersion
+         and "Product version" 1.0.0-beta.3, so installed builds can be told apart. -->
+    <Version>1.0.0-dev</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <Product>STIG GPO Manager</Product>
     <Company>Site ISSO / Systems Administration</Company>
     <Description>Quarterly import of DISA STIG GPOs into Active Directory</Description>
