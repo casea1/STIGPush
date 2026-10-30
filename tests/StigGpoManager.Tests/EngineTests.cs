@@ -340,5 +340,20 @@ namespace StigGpoManager.Tests
             Assert.DoesNotContain(_ad.Calls, c => c.StartsWith("NewLink"));
             Assert.Contains(_engine.Preflight(), r => r.Name == "Target OUs exist" && r.Status == CheckStatus.Fail && r.Detail.Contains(TestData.PilotOu));
         }
+
+        [Fact]
+        public void PromoteWarnsWhenTheOldVersionStaysLinkedOnAnOuNoLongerInConfig()
+        {
+            var run = ImportMemberServer();
+            var item = run.Items.Single();
+            // The admin moved the mapping from the AdminOu to the ProdOu only; the old version is still linked on AdminOu.
+            item.ProdTargets.RemoveAll(t => AppConfig.DnEquals(t, TestData.AdminOu));
+            _engine.ExecutePilot(run);
+            var plan = _engine.PlanPromote(run);
+            Assert.Contains(plan.Warnings, w => w.Contains(Old) && w.Contains(TestData.AdminOu) && w.Contains("keeps applying"));
+            Assert.DoesNotContain(plan.Warnings, w => w.Contains("still linked") && w.Contains(TestData.ProdOu));
+            Assert.Equal("OU=Servers,OU=Admin,DC=corp,DC=example,DC=com", AppConfig.SomToDn("corp.example.com/Admin/Servers"));
+            Assert.Equal("DC=corp,DC=example,DC=com", AppConfig.SomToDn("corp.example.com"));
+        }
     }
 }

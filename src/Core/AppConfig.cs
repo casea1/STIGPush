@@ -305,6 +305,20 @@ namespace StigGpoManager.Core
             return Regex.IsMatch(dn.Trim(), @"^((OU|CN|DC)=[^,=]+)(,\s*(OU|CN|DC)=[^,=]+)*$", RegexOptions.IgnoreCase);
         }
 
+        /// <summary>
+        /// GPO reports give link locations as canonical names ("corp.example.com/Admin/Servers"); turns one into a DN
+        /// (OU=Servers,OU=Admin,DC=corp,DC=example,DC=com). A value that already looks like a DN is returned as is.
+        /// </summary>
+        public static string SomToDn(string som)
+        {
+            if (string.IsNullOrWhiteSpace(som)) return som;
+            if (som.Contains("=")) return som;
+            var parts = som.Trim('/').Split('/');
+            var dn = DomainToDn(parts[0]);
+            foreach (var ou in parts.Skip(1)) dn = "OU=" + ou.Replace(",", "\\,") + "," + dn;
+            return dn;
+        }
+
         public static bool DnEquals(string a, string b) =>
             string.Equals(NormalizeDn(a), NormalizeDn(b), StringComparison.OrdinalIgnoreCase);
 

@@ -310,8 +310,34 @@ namespace StigGpoManager.Core
                 if (item.PilotMode == PilotMode.OU)
                     foreach (var p in item.PilotTargets.Where(p => !item.ProdTargets.Any(q => AppConfig.DnEquals(p, q))))
                         plan.Add("Remove", p, $"Remove pilot-only link of '{item.NewGpoName}' (production link on parent OU now applies)");
+                plan.Warnings.AddRange(OldLinksOutsideTargets(item));
             }
             return plan;
+        }
+
+        /// <summary>
+        /// Enabled links of an older version on OUs that are no longer this mapping's production OUs (the OUs were
+        /// changed in config). Promote only disables the old version where it links the new one, so these would keep
+        /// applying; they are reported, never changed silently, because the admin may rely on them.
+        /// </summary>
+        public List<string> OldLinksOutsideTargets(RunItem item)
+        {
+            var warnings = new List<string>();
+            foreach (var oldId in item.OlderVersionIds ?? new List<string>())
+            {
+                List<GpoLinkLocation> locations;
+                try { locations = Directory.GetGpoLinkLocations(oldId); } catch { continue; }
+                string oldName = null;
+                foreach (var loc in locations.Where(l => l.Enabled))
+                {
+                    var dn = AppConfig.SomToDn(loc.SomPath);
+                    if (item.ProdTargets.Concat(item.PilotTargets).Any(t => AppConfig.DnEquals(t, dn))) continue;
+                    if (oldName == null) { try { oldName = Directory.GetAllGpos().FirstOrDefault(g => LinkOrdering.SameGpo(g.Id, oldId))?.DisplayName ?? oldId; } catch { oldName = oldId; } }
+                    warnings.Add($"Previous version '{oldName}' is still linked (enabled) on {dn}, which is not a production OU of '{item.MappingKey}' any more. " +
+                                 $"It keeps applying there. If the OUs changed on purpose, disable or delete that link in GPMC; otherwise add {dn} back to the mapping's production OUs.");
+                }
+            }
+            return warnings;
         }
 
         public void ExecutePromote(RunState run, string typedConfirmation, IEnumerable<RunItem> items = null, bool dcBackupConfirmed = false)
