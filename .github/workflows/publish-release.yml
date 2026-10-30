@@ -1,4 +1,4 @@
-# Publishes an existing draft release (creates its tag). Run by hand: Actions -> Publish release.
+# Publishes an existing draft release (which creates its tag). Run by hand: Actions -> Publish release -> Run workflow.
 name: Publish release
 
 on:
