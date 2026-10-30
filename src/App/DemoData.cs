@@ -190,6 +190,7 @@ namespace StigGpoManager
             Backup(Path.Combine(src, "DoD WinSvr 2025 MS and DC v1r4", "GPOs"), "DoD WinSvr 2025 Domain Controller STIG Computer v1r4", R.Report("dc", R.Account("MinimumPasswordLength", 15)));
             Backup(Path.Combine(src, "DoD Windows 11 v2r9", "GPOs"), "DoD Windows 11 STIG User v2r9",
                 R.Report("w11u", R.Policy("Windows Components/AutoPlay Policies", "Turn off Autoplay", "Enabled"), R.Policy("Printers", "Point and Print Restrictions", "Enabled")));
+            Backup(Path.Combine(src, "DoD Microsoft Defender Antivirus v2r5", "GPOs"), "DoD Microsoft Defender Antivirus STIG Computer v2r5", R.Report("defender", R.Policy("Windows Components/Microsoft Defender Antivirus", "Turn off Microsoft Defender Antivirus", "Disabled")));
             Backup(Path.Combine(src, "DoD Google Chrome v2r11", "GPOs"), "DoD Google Chrome STIG Computer v2r11", R.Report("chrome"));
             Backup(Path.Combine(src, "DoD Microsoft Edge v2r3", "GPOs"), "DoD Microsoft Edge STIG Computer v2r3", R.Report("edge"));
 

@@ -868,7 +868,7 @@ namespace StigGpoManager
                 ListComputers(false); await WaitIdle();
                 await Shot(folder, "08-promote", "PanelPromote");
 
-                var plan = await Task.Run(() => Engine.PlanPilot(_run, _run.Items));
+                var plan = await Task.Run(() => Engine.PlanPromote(_run));
                 var dlg = new ConfirmWindow(this, plan) { Width = 1000, Height = 720, WindowStartupLocation = WindowStartupLocation.Manual, Left = Left + 60, Top = Top + 40 };
                 dlg.Show();
                 await Settle();

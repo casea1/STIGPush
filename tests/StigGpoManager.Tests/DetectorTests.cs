@@ -90,6 +90,18 @@ namespace StigGpoManager.Tests
             Assert.Contains(ranked, p => p.Prefix == "OPS - " && p.GpoCount == 2);
         }
 
+        [Theory]
+        [InlineData("DoD MS Defender Antivirus STIG Comp {Version}", "DoD Microsoft Defender Antivirus STIG Computer v2r4", true)]
+        [InlineData("DoD WinSvr2025 MS STIG Comp {Version}", "DoD WinSvr 2025 Member Server STIG Computer v1r4", true)]
+        [InlineData("DoD WinSvr2025 MS STIG Comp {Version}", "DoD Windows Server 2025 MS STIG Computer v1r4", true)]
+        [InlineData("DoD Win11 STIG Comp {Version}", "DoD Windows 11 STIG Computer v2r9", true)]
+        [InlineData("DoD Win11 STIG Comp {Version}", "DoD Windows 10 STIG Computer v3r4", false)]
+        public void SuggestedMatchesFitDisaNaming(string template, string backup, bool expected)
+        {
+            var m = new GpoMapping { NameTemplate = template, Match = ConfigDetector.SuggestMatch(template, "DoD ") };
+            Assert.Equal(expected, m.IsMatch(backup));
+        }
+
         [Fact]
         public void SuggestsMappingFromUnmatchedBackup()
         {

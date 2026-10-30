@@ -179,7 +179,7 @@ namespace StigGpoManager.Core
 
         private static readonly Dictionary<string, string> Synonyms = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            { "MS", "(MS|Member Server)" }, { "DC", "(DC|Domain Controller)" },
+            { "MS", "(MS|Microsoft|Member Server)" }, { "DC", "(DC|Domain Controller)" },
             { "Comp", "Comp(uter)?" }, { "Computer", "Comp(uter)?" }, { "Usr", "(Usr|User)" }, { "User", "User" },
             { "Svr", "(Svr|Server)" }, { "Srv", "(Srv|Server)" }, { "Server", "(Server|Svr)" },
             { "Win", "(Win|Windows)" }, { "Windows", "(Win|Windows)" }, { "AV", "(AV|Antivirus)" },
