@@ -220,6 +220,16 @@ namespace StigGpoManager
 
         private void HealthCard_Click(object sender, RoutedEventArgs e) => ShowView(HealthView);
 
+        /// <summary>"2 config warnings; Domain controllers: Single-DC domain ..." - grouped, never "Config; Config".</summary>
+        private static string WarningSummary(List<CheckResult> warns)
+        {
+            var parts = warns.GroupBy(w => w.Name).Select(g => g.Count() > 1
+                ? $"{g.Count()} {g.Key.ToLowerInvariant()} warnings"
+                : g.Key + ": " + (g.First().Detail ?? "").Split(new[] { ". " }, StringSplitOptions.None)[0].TrimEnd('.')).ToList();
+            var text = string.Join("; ", parts.Take(2)) + (parts.Count > 2 ? $"; +{parts.Count - 2} more" : "") + ".";
+            return text.Length > 160 ? text.Substring(0, 157) + "..." : text;
+        }
+
         private void RefreshHealthCard()
         {
             if (_lastPreflight == null) { HealthTitle.Text = "Checking the domain ..."; HealthDetail.Text = ""; HealthDot.Background = (Brush)FindResource("Muted"); return; }
@@ -228,7 +238,7 @@ namespace StigGpoManager
             HealthDot.Background = (Brush)FindResource(fails.Count > 0 ? "Danger" : warns.Count > 0 ? "Warn" : "Success");
             HealthTitle.Text = fails.Count > 0 ? $"{fails.Count} problem(s) need fixing" : warns.Count > 0 ? "Ready, with warnings" : "Domain checks passed";
             HealthDetail.Text = fails.Count > 0 ? fails[0].Name + ": " + fails[0].Detail
-                              : warns.Count > 0 ? string.Join("; ", warns.Take(2).Select(w => w.Name)) + ". Click for details."
+                              : warns.Count > 0 ? WarningSummary(warns) + " Click for details."
                               : $"{_session.Config?.Domain} via {_session.Directory?.Server}. Click for details.";
         }
 

@@ -14,7 +14,7 @@ namespace StigGpoManager
     /// </summary>
     public sealed class TimelineView : FrameworkElement
     {
-        private const double LabelWidth = 190, HeaderHeight = 40, RowHeight = 38, BarHeight = 16;
+        private const double LabelWidth = 190, HeaderHeight = 40, RowHeight = 38, BarHeight = 16, FooterHeight = 26;
         private QuarterTimeline _tl;
 
         public event Action<string> RowClicked;
@@ -52,7 +52,7 @@ namespace StigGpoManager
         {
             int rows = Math.Max(1, _tl?.Rows.Count ?? 0);
             double w = double.IsInfinity(available.Width) ? 900 : available.Width;
-            return new Size(w, HeaderHeight + rows * RowHeight + 26);
+            return new Size(w, HeaderHeight + rows * RowHeight + FooterHeight);
         }
 
         private double X(DateTime d, double width)
@@ -71,13 +71,15 @@ namespace StigGpoManager
             double w = ActualWidth, h = ActualHeight;
             dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, w, h));
             if (_tl == null) return;
+            // Grid, bands and lines stop at the bottom of the rows; the footer (legend, "Today") stays clean.
+            double gridBottom = HeaderHeight + Math.Max(1, _tl.Rows.Count) * RowHeight;
 
             // month columns, quarter bands
             for (var m = new DateTime(_tl.From.Year, _tl.From.Month, 1); m <= _tl.To; m = m.AddMonths(1))
             {
                 double x0 = X(m, w), x1 = X(m.AddMonths(1), w);
-                if ((m.Month - 1) / 3 % 2 == 0) dc.DrawRectangle(QuarterBand, null, new Rect(x0, HeaderHeight - 6, Math.Max(0, x1 - x0), h - HeaderHeight + 6));
-                dc.DrawLine(GridPen, new Point(x0, HeaderHeight - 6), new Point(x0, h - 20));
+                if ((m.Month - 1) / 3 % 2 == 0) dc.DrawRectangle(QuarterBand, null, new Rect(x0, HeaderHeight - 6, Math.Max(0, x1 - x0), gridBottom - HeaderHeight + 6));
+                dc.DrawLine(GridPen, new Point(x0, HeaderHeight - 6), new Point(x0, gridBottom));
                 var label = m.ToString(m.Month == 1 || m == new DateTime(_tl.From.Year, _tl.From.Month, 1) ? "MMM yyyy" : "MMM", CultureInfo.CurrentUICulture);
                 var ft = Text(label, 11, Muted);
                 dc.DrawText(ft, new Point(x0 + 4, 4));
@@ -87,7 +89,7 @@ namespace StigGpoManager
             foreach (var mk in _tl.Markers.Where(m => m.Kind == MarkerKind.DisaRelease || m.Kind == MarkerKind.ExpectedRelease))
             {
                 double x = X(mk.Date, w);
-                dc.DrawLine(ReleasePen, new Point(x, HeaderHeight - 8), new Point(x, h - 20));
+                dc.DrawLine(ReleasePen, new Point(x, HeaderHeight - 8), new Point(x, gridBottom));
                 var ft = Text(mk.Kind == MarkerKind.ExpectedRelease ? "◆ next release" : "◆ DISA", 10, mk.Kind == MarkerKind.ExpectedRelease ? Accent : Muted, mk.Kind == MarkerKind.ExpectedRelease);
                 dc.DrawText(ft, new Point(x + 3, 21));
             }
@@ -119,11 +121,17 @@ namespace StigGpoManager
                         dc.DrawText(Text("rolled back", 10, RollbackBrush), new Point(x + 8, barY));
                         continue;
                     }
-                    if (x1 <= x0) x1 = x0 + 3;
+                    if (x1 - x0 < 8) x1 = x0 + 8; // a period of a day or two is still visible
                     var brush = s.Kind == SegmentKind.Prepare ? PrepareBrush : s.Kind == SegmentKind.Pilot ? PilotBrush : s.Open ? ProdBrush : ProdOldBrush;
                     dc.DrawRoundedRectangle(brush, null, new Rect(x0, barY, x1 - x0, BarHeight), 4, 4);
                     var lab = Text(s.Label, 10.5, Brushes.White, true);
                     if (lab.Width + 10 < x1 - x0) dc.DrawText(lab, new Point(x0 + 6, barY + 1));
+                    else if (s.Open && s == row.Segments.Last(x => x.Kind != SegmentKind.RolledBack))
+                    {
+                        // Too short for its label (e.g. promoted today): say it beside the bar, clear of the today line.
+                        var outside = Text(s.Label + " since " + s.Start.ToString("d MMM", CultureInfo.CurrentUICulture), 10.5, brush == ProdBrush ? ProdBrush : Muted, true);
+                        dc.DrawText(outside, new Point(Math.Min(x1 + 8, w - outside.Width - 4), barY + 1));
+                    }
                 }
                 foreach (var mk in row.Markers.Where(m => m.Kind == MarkerKind.SoakEnds))
                 {
@@ -144,17 +152,17 @@ namespace StigGpoManager
 
             // today line
             double tx = X(_tl.Today, w);
-            dc.DrawLine(TodayPen, new Point(tx, HeaderHeight - 8), new Point(tx, h - 20));
+            dc.DrawLine(TodayPen, new Point(tx, HeaderHeight - 8), new Point(tx, gridBottom + 2));
             var today = Text("Today", 10, Accent, true);
-            dc.DrawText(today, new Point(tx - today.Width / 2, h - 18));
+            dc.DrawText(today, new Point(tx - today.Width / 2, gridBottom + 5));
 
             // legend
             double lx = 10;
             foreach (var (b, t) in new[] { (PrepareBrush, "Prepare"), (PilotBrush, "Pilot"), (ProdBrush, "In production"), (ProdOldBrush, "Replaced") })
             {
-                dc.DrawRoundedRectangle(b, null, new Rect(lx, h - 15, 12, 8), 2, 2);
+                dc.DrawRoundedRectangle(b, null, new Rect(lx, gridBottom + 9, 12, 8), 2, 2);
                 var ft = Text(t, 10, Muted);
-                dc.DrawText(ft, new Point(lx + 16, h - 19));
+                dc.DrawText(ft, new Point(lx + 16, gridBottom + 5));
                 lx += ft.Width + 34;
             }
         }
