@@ -11,8 +11,7 @@ namespace StigGpoManager
     /// StigGpoManager.exe
     ///   (no args)        open the main window (and tray icon)
     ///   /tray            start minimized to the tray (used by the logon scheduled task)
-    ///   /install [/quiet]   install to Program Files, Programs and Features, Start menu, tray at logon
-    ///   /uninstall [/quiet]
+    ///   /postinstall, /register-tray, /preuninstall   hooks used by the Inno Setup installer
     ///   /config &lt;path&gt;   use a specific config.json
     ///   /setup           open the setup wizard (detects domain settings, writes config.json)
     ///   /demo            simulated domain with sample data (no AD access) - training / evaluation
@@ -42,21 +41,9 @@ namespace StigGpoManager
                     Console.WriteLine();
                     return Cli.Run(args.Skip(1).ToArray(), configPath);
                 }
-                if (Has("/install"))
-                {
-                    var msg = Installer.Install();
-                    if (!quiet) MessageBox.Show(msg, "STIG GPO Manager - installed", MessageBoxButton.OK, MessageBoxImage.Information);
-                    return 0;
-                }
-                if (Has("/uninstall"))
-                {
-                    if (!quiet && MessageBox.Show("Uninstall STIG GPO Manager?\n\nThe configuration, run state, backups, reports and audit log are kept.",
-                                                  "STIG GPO Manager", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
-                        return 1;
-                    var msg = Installer.Uninstall();
-                    if (!quiet) MessageBox.Show(msg, "STIG GPO Manager - uninstalled", MessageBoxButton.OK, MessageBoxImage.Information);
-                    return 0;
-                }
+                if (Has("/postinstall")) { Installer.PostInstall(); return 0; }
+                if (Has("/register-tray")) { Installer.RegisterTray(); return 0; }
+                if (Has("/preuninstall")) { Installer.PreUninstall(); return 0; }
             }
             catch (Exception ex)
             {
@@ -77,25 +64,6 @@ namespace StigGpoManager
                     if (!trayMode)
                         try { using (var ev = EventWaitHandle.OpenExisting(ShowEventName)) ev.Set(); } catch { }
                     return 0;
-                }
-
-                if (!trayMode && !demo && !Installer.IsInstalled && !quiet)
-                {
-                    var answer = MessageBox.Show(
-                        "STIG GPO Manager is not installed on this computer.\n\nInstall it now? This adds it to Programs and Features and the Start menu, and shows the tray icon at logon.\n\nChoose No to run it once without installing.",
-                        "STIG GPO Manager", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
-                    if (answer == MessageBoxResult.Cancel) return 0;
-                    if (answer == MessageBoxResult.Yes)
-                    {
-                        try
-                        {
-                            MessageBox.Show(Installer.Install(startTray: false), "STIG GPO Manager - installed", MessageBoxButton.OK, MessageBoxImage.Information);
-                        }
-                        catch (Exception ex)
-                        {
-                            MessageBox.Show("Install failed: " + ex.Message, "STIG GPO Manager", MessageBoxButton.OK, MessageBoxImage.Error);
-                        }
-                    }
                 }
 
                 var app = new App(trayMode, ResolveConfigPath(configPath), demo, screenshots == null ? null : Path.GetFullPath(screenshots)) { OpenSetupOnStart = Has("/setup") };

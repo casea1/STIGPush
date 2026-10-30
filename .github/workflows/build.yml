@@ -53,6 +53,43 @@ jobs:
           "SHA256=$hash" | Out-File -Append $env:GITHUB_ENV
           Write-Host "StigGpoManager.exe SHA-256 $hash"
 
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup --no-progress -y | Out-Null }
+          $num = ($env:VERSION -replace '-.*$','') + '.' + $env:GITHUB_RUN_NUMBER
+          & $iscc /Q "/DAppVersion=$env:VERSION" "/DAppVersionNum=$num" packaging\installer\StigGpoManager.iss
+          if ($LASTEXITCODE) { throw "ISCC failed ($LASTEXITCODE)" }
+          $setup = Get-ChildItem dist\StigGpoManager-Setup-*.exe | Select-Object -First 1
+          $h = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash
+          "$h  $($setup.Name)" | Add-Content dist\StigGpoManager.exe.sha256 -Encoding ASCII
+          Write-Host "$($setup.Name) SHA-256 $h"
+
+      - name: Installer test (silent install, upgrade, uninstall)
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $setup = (Get-ChildItem dist\StigGpoManager-Setup-*.exe | Select-Object -First 1).FullName
+          $exe = "$env:ProgramFiles\StigGpoManager\StigGpoManager.exe"
+          function Find-Uninstall { Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' -ErrorAction SilentlyContinue | Where-Object DisplayName -eq 'STIG GPO Manager' }
+          $p = Start-Process $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=tray' -Wait -PassThru
+          if ($p.ExitCode) { throw "install exit $($p.ExitCode)" }
+          if (-not (Test-Path $exe)) { throw 'exe not installed' }
+          if (-not (Find-Uninstall)) { throw 'not in Programs and Features' }
+          if (-not (Test-Path "$env:ProgramData\StigGpoManager")) { throw 'data folder missing' }
+          schtasks /Query /TN 'StigGpoManager Tray' | Out-Null; if ($LASTEXITCODE) { throw 'tray task missing' }
+          Write-Host "Installed: $((Find-Uninstall).DisplayVersion)"
+          $p = Start-Process $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          if ($p.ExitCode) { throw "upgrade (re-run) exit $($p.ExitCode)" }
+          $un = (Find-Uninstall).UninstallString.Trim('"')
+          $p = Start-Process $un -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait -PassThru
+          Start-Sleep 3
+          if (Find-Uninstall) { throw 'still in Programs and Features after uninstall' }
+          if (Test-Path $exe) { throw 'exe left behind' }
+          schtasks /Query /TN 'StigGpoManager Tray' 2>$null | Out-Null; if (-not $LASTEXITCODE) { throw 'tray task left behind' }
+          Write-Host 'Install / upgrade / uninstall OK'
+
       - name: Smoke test (exe starts, PowerShell host assembly binds)
         shell: pwsh
         timeout-minutes: 3

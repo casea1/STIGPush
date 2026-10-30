@@ -13,8 +13,9 @@ using StigGpoManager.Core;
 namespace StigGpoManager
 {
     /// <summary>
-    /// The wizard UI. It only calls StigEngine (and Session); every AD change goes through a
-    /// Plan -> ConfirmWindow -> Execute sequence on a background thread, with log lines streamed back.
+    /// Home (calendar of quarterly updates, current update, history) and a four-stage update view
+    /// (Prepare, Review, Pilot, Promote) with one primary action per stage. Every AD change still goes
+    /// through Plan -> ConfirmWindow -> Execute on a background thread.
     /// </summary>
     public partial class MainWindow : Window
     {
@@ -22,12 +23,13 @@ namespace StigGpoManager
         private RunState _run;
         private PackageScanResult _scan;
         private List<BackupRow> _backupRows = new List<BackupRow>();
-        private List<StoreRow> _storeRows = new List<StoreRow>();
+        private List<CentralStoreItem> _storeItems = new List<CentralStoreItem>();
         private ReviewResult _review;
-        private ScanGateResult _gate;
+        private List<CheckResult> _lastPreflight;
         private ObservableCollection<ExceptionEntry> _register = new ObservableCollection<ExceptionEntry>();
         private readonly ObservableCollection<LogLine> _log = new ObservableCollection<LogLine>();
         private string _zipPath;
+        private Stage _viewStage = Stage.Prepare;
 
         public bool IsBusy { get; private set; }
         public bool ExitRequested { get; set; }
@@ -39,18 +41,15 @@ namespace StigGpoManager
         {
             InitializeComponent();
             _session = session;
+            LogList.ItemsSource = _log;
+            RegisterGrid.ItemsSource = _register;
+            Calendar.RowClicked += id => OpenRun(id);
             if (session.IsDemo)
             {
                 Title = "STIG GPO Manager - DEMO (simulated domain, no AD changes)";
                 HeaderBorder.Background = new SolidColorBrush(Color.FromRgb(0x92, 0x40, 0x0E));
                 session.Engine.Log += AddLog;
             }
-            LogList.ItemsSource = _log;
-            PilotChecklist.ItemsSource = StigEngine.PilotChecklist;
-            RegisterGrid.ItemsSource = _register;
-            _steps = BuildSteps();
-            StepList.ItemsSource = _steps;
-            StepList.SelectedIndex = 0;
             Loaded += (s, e) => Connect();
             Closed += (s, e) => _session.Dispose();
         }
@@ -59,32 +58,30 @@ namespace StigGpoManager
 
         private void AddLog(LogLevel level, string text)
         {
-            Brush brush;
-            switch (level)
-            {
-                case LogLevel.Error: brush = Brushes.Firebrick; break;
-                case LogLevel.Warning: brush = Brushes.DarkOrange; break;
-                case LogLevel.Success: brush = Brushes.DarkGreen; break;
-                default: brush = Brushes.Black; break;
-            }
+            Brush brush = level == LogLevel.Error ? Brushes.Firebrick : level == LogLevel.Warning ? Brushes.DarkOrange : level == LogLevel.Success ? Brushes.DarkGreen : Brushes.Black;
             var line = new LogLine { Text = $"{DateTime.Now:HH:mm:ss} {text}", Brush = brush };
             Dispatcher.BeginInvoke(new Action(() =>
             {
                 _log.Add(line);
                 while (_log.Count > 5000) _log.RemoveAt(0);
                 LogList.ScrollIntoView(line);
+                if (level != LogLevel.Info) StatusText.Text = text;
             }));
         }
 
-        private void AddCommand(string text)
+        private void AddCommand(string text) => Dispatcher.BeginInvoke(new Action(() =>
         {
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                if (ShowCommands.IsChecked != true) return;
-                var line = new LogLine { Text = $"{DateTime.Now:HH:mm:ss}     {text}", Brush = Brushes.SteelBlue };
-                _log.Add(line);
-                LogList.ScrollIntoView(line);
-            }));
+            if (ShowCommands.IsChecked != true) return;
+            var line = new LogLine { Text = $"{DateTime.Now:HH:mm:ss}     {text}", Brush = Brushes.SteelBlue };
+            _log.Add(line);
+            LogList.ScrollIntoView(line);
+        }));
+
+        private void LogToggle_Changed(object sender, RoutedEventArgs e)
+        {
+            var on = LogToggle.IsChecked == true;
+            LogList.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
+            ShowCommands.Visibility = on ? Visibility.Visible : Visibility.Collapsed;
         }
 
         private void SetBusy(bool busy, string text = null)
@@ -93,13 +90,14 @@ namespace StigGpoManager
             Busy.Visibility = busy ? Visibility.Visible : Visibility.Hidden;
             Busy.IsIndeterminate = busy;
             StatusText.Text = busy ? text + " ..." : "Ready";
-            Panels.IsEnabled = !busy;
+            Views.IsEnabled = !busy;
+            NewUpdateButton.IsEnabled = !busy;
         }
 
         /// <summary>Runs work off the UI thread; errors are logged and shown; then continues on the UI thread.</summary>
         private void RunOp<T>(string title, Func<T> work, Action<T> done = null)
         {
-            if (IsBusy) { MessageBox.Show(this, "Another operation is running.", Title); return; }
+            if (IsBusy) { MessageBox.Show(this, "Another operation is still running.", Title); return; }
             SetBusy(true, title);
             AddLog(LogLevel.Info, "== " + title);
             Task.Run(work).ContinueWith(t =>
@@ -116,7 +114,7 @@ namespace StigGpoManager
                     try { done?.Invoke(t.Result); }
                     catch (Exception ex) { AddLog(LogLevel.Error, ex.Message); MessageBox.Show(this, ex.Message, Title, MessageBoxButton.OK, MessageBoxImage.Error); }
                 }
-                RefreshRunViews();
+                RefreshAll();
             }, TaskScheduler.FromCurrentSynchronizationContext());
         }
 
@@ -127,7 +125,7 @@ namespace StigGpoManager
         private void Push(string title, Func<OperationPlan> plan, Action<ConfirmResult> execute, Action after = null)
         {
             if (!RequireEngine()) return;
-            RunOp("Planning: " + title, plan, p =>
+            RunOp("Preparing: " + title, plan, p =>
             {
                 var r = ConfirmWindow.Ask(this, p);
                 if (!r.Confirmed) { AddLog(LogLevel.Info, title + ": cancelled, nothing changed."); return; }
@@ -138,15 +136,8 @@ namespace StigGpoManager
         private bool RequireEngine()
         {
             if (Engine != null) return true;
-            MessageBox.Show(this, "Not connected to the domain. Fix the config / pre-flight problems on the Start page, then Reload config.", Title, MessageBoxButton.OK, MessageBoxImage.Warning);
-            return false;
-        }
-
-        private bool RequireRun()
-        {
-            if (!RequireEngine()) return false;
-            if (_run != null) return true;
-            MessageBox.Show(this, "No run is open. Load a package (step 1) or resume a run on the Start page.", Title, MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(this, "Not connected to the domain. Open Health to see what is wrong, or run the setup wizard.", Title, MessageBoxButton.OK, MessageBoxImage.Warning);
+            ShowView(HealthView);
             return false;
         }
 
@@ -157,412 +148,455 @@ namespace StigGpoManager
             else if (File.Exists(path)) Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
         }
 
-        // ================================================================ steps, guide and Next button
-
-        private List<StepItem> _steps;
-        private List<CheckResult> _lastPreflight;
-        private StepItem _shown;
-
-        private static StepItem Step(string panel, string number, string title, string what, string doText, string changes, bool main = true) =>
-            new StepItem { Panel = panel, Number = number, Title = title, What = what, Do = doText, Changes = changes, IsMain = main };
-
-        private List<StepItem> BuildSteps() => new List<StepItem>
+        private void ShowView(FrameworkElement view)
         {
-            Step("PanelStart", "0", "Start / pre-flight",
-                 "Checks this computer, your rights and the domain, and lists the quarterly runs (a run keeps everything for one DISA package, so you can come back after the pilot soak).",
-                 "Fix any red rows (Setup wizard if the config is missing). Then resume an open run, or click Next to start a new one.",
-                 "None."),
-            Step("PanelLoad", "1", "Load DISA package",
-                 "Opens the DISA GPO zip, shows its SHA-256, and finds every GPO backup and template inside it.",
-                 "Drop the zip here and click Load package. Red rows match no mapping: pick one in the Mapping column or leave them skipped. Matching uses the GPO names inside the package, not this computer.",
-                 "None."),
-            Step("PanelStore", "2", "Central Store",
-                 "Compares the package's ADMX/ADML templates with the domain Central Store. Newer files win; the store is never downgraded.",
-                 "Click Compare. If files are New or Updated, click Push to back up the store and copy them. If everything is up to date this step completes by itself.",
-                 "Copies template files into SYSVOL PolicyDefinitions after zipping a backup. No GPO changes."),
-            Step("PanelImport", "3", "Import new GPOs",
-                 "Backs up every GPO, then creates one NEW GPO per selected backup, named with its version (e.g. ... v1r4).",
-                 "Check the list and click Push: import.",
-                 "Creates new GPOs. Never overwrites an existing GPO. Links nothing."),
-            Step("PanelReview", "4", "Review changes",
-                 "Compares each new GPO with the version in use, and checks your exception GPOs against what DISA changed.",
-                 "Click Run review. Read red rows (user rights / restricted groups your exceptions replace) and yellow rows. Keep the HTML report.",
-                 "None."),
-            Step("PanelPilot", "5", "Pilot",
-                 "Links each new GPO to the pilot OUs (or to production, filtered to the pilot group), always below your exception GPOs.",
-                 "Click Push: link pilot. Then gpupdate and scan the pilot machines, test, and let them soak 1-2 weeks. You can close the tool meanwhile.",
-                 "Creates links (and security filtering for group pilot). Link order is verified."),
-            Step("PanelScans", "6", "Scan results gate",
-                 "Reads SCC / Evaluate-STIG results from pilot machines and compares open findings with the exceptions register.",
-                 "Drop the .ckl / .cklb / XCCDF files. Fix blocking findings and re-scan, or add them to the register with a justification.",
-                 "None."),
-            Step("PanelPromote", "7", "Promote",
-                 "Links each new GPO to production, disables (does not delete) the previous version, and removes pilot links.",
-                 "Click Push: PROMOTE and type PROMOTE. Then refresh policy on the computers.",
-                 "Creates and reorders links, disables old-version links. The old GPO stays for one-click rollback."),
-            Step("PanelRollback", "", "Rollback (if needed)",
-                 "Puts every OU this run touched back the way it was before the run.",
-                 "Tick the GPOs (or roll back the whole run) and click Push.",
-                 "Re-enables old-version links, disables new ones, restores the recorded link order.", main: false),
-            Step("PanelCleanup", "", "Cleanup (next quarter)",
-                 "Finds DISA GPOs two or more versions old with no enabled links.",
-                 "Next quarter: Find candidates, tick the ones to delete, Push and type DELETE.",
-                 "Backs up, then deletes, the selected old GPOs.", main: false),
-            new StepItem { IsSeparator = true, Title = "TOOLS" },
-            Step("PanelRegister", "", "Exceptions register",
-                 "Your accepted deviations: V-ID, justification and POA&M reference. Open findings listed here do not block Promote.",
-                 "Add or edit rows and click Save register.", "None (a local file).", main: false),
-            Step("PanelAudit", "", "Audit log",
-                 "Every change the tool made, who made it and the result. Append-only.", "Filter to the current run for your SSP / POA&M evidence.", "None.", main: false),
-        };
-
-        private void StepList_SelectionChanged(object sender, SelectionChangedEventArgs e)
-        {
-            if (!(StepList.SelectedItem is StepItem item)) return;
-            if (item.IsSeparator) { StepList.SelectedItem = _shown; return; }
-            _shown = item;
-            foreach (UIElement child in Panels.Children)
-                child.Visibility = (child as FrameworkElement)?.Name == item.Panel ? Visibility.Visible : Visibility.Collapsed;
-            StepTitle.Text = (string.IsNullOrEmpty(item.Number) || item.Number == "0" ? "" : item.Number + ". ") + item.Title;
-            GuideWhat.Text = item.What;
-            GuideDo.Text = item.Do;
-            bool changesAd = !item.Changes.StartsWith("None");
-            GuideChanges.Text = changesAd ? "Changes: " + item.Changes : "";
-            GuideChanges.Visibility = changesAd ? Visibility.Visible : Visibility.Collapsed;
-            ChangesPillText.Text = changesAd ? "Changes AD (asks first)" : "No AD changes";
-            ChangesPill.Background = (Brush)FindResource(changesAd ? "WarnSoft" : "SuccessSoft");
-            if (item.Panel == "PanelAudit") LoadAudit();
-            if (item.Panel == "PanelRegister") LoadRegister();
-            UpdateFooter();
+            foreach (UIElement child in Views.Children) child.Visibility = child == view ? Visibility.Visible : Visibility.Collapsed;
+            if (view == AuditView) LoadAudit();
+            if (view == RegisterView) LoadRegister();
+            if (view == HomeView) RefreshHome();
         }
 
-        private void GoTo(string panel)
+        private void RefreshAll()
         {
-            var step = _steps?.FirstOrDefault(s => s.Panel == panel);
-            if (step != null) StepList.SelectedItem = step;
-        }
-
-        private static bool Reached(RunState r, RunPhase p) =>
-            r != null && (r.Phase == p || r.History.Any(h => h.Phase == p.ToString()));
-
-        /// <summary>Works out each step's state from the run and the last pre-flight, marks the next step, refreshes the footer.</summary>
-        private void RefreshSteps()
-        {
-            if (_steps == null) return;
-            var r = _run;
-            var soak = _session.Config?.SoakDays ?? 14;
-            foreach (var s in _steps.Where(x => !x.IsSeparator))
-            {
-                StepState st = s.IsMain ? StepState.Pending : StepState.Optional;
-                string cap = "";
-                switch (s.Panel)
-                {
-                    case "PanelStart":
-                        if (_lastPreflight == null) cap = Engine == null ? "Not connected" : "Checking...";
-                        else if (_lastPreflight.Any(c => c.Status == CheckStatus.Fail)) { st = StepState.Attention; cap = $"{_lastPreflight.Count(c => c.Status == CheckStatus.Fail)} check(s) failed"; }
-                        else { st = StepState.Done; cap = "Checks passed"; }
-                        break;
-                    case "PanelLoad":
-                        if (r != null) { st = StepState.Done; cap = r.Package?.HashMatches == false ? "HASH MISMATCH" : r.Package?.Name; if (r.Package?.HashMatches == false) st = StepState.Attention; }
-                        else cap = "No package loaded";
-                        break;
-                    case "PanelStore":
-                        if (Reached(r, RunPhase.CentralStoreUpdated)) { st = StepState.Done; cap = r.History.LastOrDefault(h => h.Phase == "CentralStoreUpdated")?.Note ?? "Updated"; }
-                        else cap = r == null ? "" : "Not checked yet";
-                        break;
-                    case "PanelImport":
-                        var n = r?.Items.Count(i => i.NewGpoId != null) ?? 0;
-                        if (r != null && r.Items.Any(i => i.Status == ItemStatus.Failed)) { st = StepState.Attention; cap = "An import failed"; }
-                        else if (n > 0) { st = StepState.Done; cap = $"{n} GPO(s) created"; }
-                        break;
-                    case "PanelReview":
-                        if (Reached(r, RunPhase.Reviewed))
-                        {
-                            var warn = r.Items.Sum(i => i.ReplacementWarnings);
-                            st = StepState.Done;
-                            cap = warn > 0 ? $"Reviewed - {warn} replacement warning(s)" : "Reviewed";
-                        }
-                        break;
-                    case "PanelPilot":
-                        if (r != null && r.Items.Any(i => i.Status == ItemStatus.Piloted || i.Status == ItemStatus.Promoted)) { st = StepState.Done; cap = r.Phase == RunPhase.Piloted ? r.StatusText(soak, DateTime.UtcNow) : "Piloted"; }
-                        break;
-                    case "PanelScans":
-                        if (r?.Gate != null) { st = r.Gate.Passed ? StepState.Done : StepState.Attention; cap = r.Gate.Passed ? "Gate passed" : $"{r.Gate.BlockingCount} blocking finding(s)"; }
-                        else if (r != null && !(_session.Config?.RequireScanGate ?? true) && Reached(r, RunPhase.Piloted)) { st = StepState.Done; cap = "Gate optional (off)"; }
-                        break;
-                    case "PanelPromote":
-                        if (Reached(r, RunPhase.Promoted)) { st = StepState.Done; cap = r.StatusText(soak, DateTime.UtcNow); }
-                        break;
-                    case "PanelRollback":
-                        if (r != null && r.Items.Any(i => i.Status == ItemStatus.RolledBack)) { st = StepState.Done; cap = "Rolled back"; }
-                        else cap = "Only if something breaks";
-                        break;
-                    case "PanelCleanup": cap = "Following quarter"; break;
-                    default: st = StepState.Tool; break;
-                }
-                s.State = st;
-                s.Caption = cap;
-            }
-            // Steps before the furthest completed one that were never done are shown as skipped;
-            // "next" is the first open step after the furthest completed step.
-            var mains = _steps.Where(x => x.IsMain).ToList();
-            int lastDone = mains.FindLastIndex(x => x.State == StepState.Done || x.State == StepState.Attention);
-            for (int i = 0; i < lastDone; i++)
-                if (mains[i].State == StepState.Pending) { mains[i].State = StepState.Skipped; mains[i].Caption = "Skipped"; }
-            var next = mains.Skip(lastDone + 1).FirstOrDefault(x => x.State == StepState.Pending);
-            if (next != null) { next.State = StepState.Next; if (string.IsNullOrEmpty(next.Caption)) next.Caption = "Next"; }
-            UpdateFooter();
-        }
-
-        private StepItem NextMainAfter(StepItem current)
-        {
-            var mains = _steps.Where(s => s.IsMain).ToList();
-            int i = mains.IndexOf(current);
-            if (i >= 0 && i + 1 < mains.Count) return mains[i + 1];
-            if (i < 0) return mains.FirstOrDefault(s => s.State != StepState.Done);
-            return null;
-        }
-
-        private void UpdateFooter()
-        {
-            if (_shown == null || NextButton == null) return;
-            var done = _shown.State == StepState.Done;
-            var target = NextMainAfter(_shown);
-            StepFooter.Visibility = Visibility.Visible;
-            if (_shown.State == StepState.Tool || _shown.State == StepState.Optional && !done)
-            {
-                StepStateBadge.Background = (Brush)FindResource("AccentSoft");
-                StepStateText.Text = _shown.State == StepState.Tool ? "Tool" : "Optional";
-            }
-            else if (done) { StepStateBadge.Background = (Brush)FindResource("SuccessSoft"); StepStateText.Text = "✓ Done"; }
-            else if (_shown.State == StepState.Attention) { StepStateBadge.Background = (Brush)FindResource("WarnSoft"); StepStateText.Text = "! Needs attention"; }
-            else if (_shown.State == StepState.Skipped) { StepStateBadge.Background = (Brush)FindResource("AccentSoft"); StepStateText.Text = "Skipped"; }
-            else { StepStateBadge.Background = (Brush)FindResource("WarnSoft"); StepStateText.Text = "Not done yet"; }
-            StepStateDetail.Text = _shown.Caption;
-
-            if (target == null)
-            {
-                NextButton.Content = _shown.Panel == "PanelPromote" && done ? "Quarter complete ✓" : "Back to start";
-                NextButton.Tag = "PanelStart";
-            }
-            else
-            {
-                NextButton.Content = "Next: " + target.Title + "  →";
-                NextButton.Tag = target.Panel;
-            }
-            NextButton.Style = (Style)FindResource(done ? "PrimaryButton" : typeof(Button));
-            NextButton.ToolTip = done ? "This step is complete." : "This step is not complete yet; you can still move on.";
-        }
-
-        private void NextStep_Click(object sender, RoutedEventArgs e)
-        {
-            if (NextButton.Tag is string panel)
-            {
-                if (panel == "PanelLoad" && _shown?.Panel == "PanelStart" && _run != null && _run.Phase != RunPhase.Closed && _run.Phase != RunPhase.RolledBack)
-                    panel = NextPanelFor(_run);
-                GoTo(panel);
-            }
-        }
-
-        // ================================================================ start / config / runs
-
-        private void Connect()
-        {
-            if (_session.IsDemo && _session.Config != null)
-            {
-                MappingColumn.ItemsSource = _session.Config.Mappings;
-                StorePathText.Text = "Central Store: " + _session.Config.EffectiveCentralStorePath;
-                RegisterPathText.Text = "Register file: " + _session.Config.ExceptionsRegisterPath;
-                AuditPathText.Text = "Append-only log: " + _session.Config.AuditLogPath;
-                ConfigPathText.Text = "Config: " + _session.ConfigPath + "   (DEMO: simulated domain, nothing touches Active Directory)";
-                AddLog(LogLevel.Warning, "DEMO MODE: simulated domain " + _session.Config.Domain + "; no Active Directory or SYSVOL access.");
-                RunOp("Running pre-flight checks (demo)", () => _session.Preflight(false), results =>
-                {
-                    PreflightGrid.ItemsSource = results;
-                    _lastPreflight = results;
-                    UpdateHeader();
-                    RefreshRuns(autoResume: true);
-                });
-                return;
-            }
             UpdateHeader();
-            ConfigPathText.Text = "Config: " + _session.ConfigPath;
-            foreach (var i in _session.Issues) AddLog(i.IsError ? LogLevel.Error : LogLevel.Warning, "Config: " + i.Message);
-            if (_session.Config == null || !_session.ConfigValid)
-            {
-                PreflightGrid.ItemsSource = _lastPreflight = _session.Preflight(false);
-                RefreshSteps();
-                if (!File.Exists(_session.ConfigPath))
-                {
-                    if (MessageBox.Show(this, $"No configuration yet ({_session.ConfigPath}).\n\nRun the setup wizard now? It detects the domain, exception-GPO prefix, pilot group and current DISA GPO links, and asks you to confirm each value.",
-                                        Title, MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
-                        Dispatcher.BeginInvoke(new Action(() => OpenSetup()));
-                }
-                return;
-            }
-            MappingColumn.ItemsSource = _session.Config.Mappings;
-            StorePathText.Text = "Central Store: " + _session.Config.EffectiveCentralStorePath;
-            RegisterPathText.Text = "Register file: " + _session.Config.ExceptionsRegisterPath;
-            AuditPathText.Text = "Append-only log: " + _session.Config.AuditLogPath;
-            bool dcdiag = DcDiagCheck.IsChecked == true;
-            RunOp("Connecting and running pre-flight checks", () =>
-            {
-                try { _session.Connect(AddLog, AddCommand); }
-                catch (Exception ex) { AddLog(LogLevel.Error, ex.Message); }
-                return _session.Preflight(dcdiag);
-            }, results =>
-            {
-                PreflightGrid.ItemsSource = results;
-                _lastPreflight = results;
-                UpdateHeader();
-                var fails = results.Count(r => r.Status == CheckStatus.Fail);
-                AddLog(fails == 0 ? LogLevel.Success : LogLevel.Warning, $"Pre-flight: {results.Count(r => r.Status == CheckStatus.Pass)} passed, {results.Count(r => r.Status == CheckStatus.Warning)} warnings, {fails} failed.");
-                RefreshRuns(autoResume: true);
-            });
+            if (HomeView.Visibility == Visibility.Visible) RefreshHome();
+            if (UpdateView.Visibility == Visibility.Visible) RefreshUpdate();
+            RunChanged?.Invoke();
         }
 
         private void UpdateHeader()
         {
             var cfg = _session.Config;
-            HeaderText.Text = cfg == null ? "config not loaded" :
-                $"Domain {cfg.Domain}   DC {(_session.Directory?.Server ?? "(not connected)")}   User {_session.User}   Working folder {cfg.WorkingFolder}";
-            RunText.Text = _run == null ? "No run open" : $"Run {_run.RunId} - {_run.StatusText(cfg?.SoakDays ?? 14, DateTime.UtcNow)}";
+            HeaderText.Text = cfg == null ? "not configured" : $"{cfg.Domain}  •  DC {_session.Directory?.Server ?? "not connected"}";
+        }
+
+        // ================================================================ connect / health
+
+        private void Connect()
+        {
+            UpdateHeader();
+            ConfigPathText.Text = "Config: " + _session.ConfigPath + (_session.IsDemo ? "   (DEMO: simulated domain, nothing touches Active Directory)" : "");
+            foreach (var i in _session.Issues) AddLog(i.IsError ? LogLevel.Error : LogLevel.Warning, "Config: " + i.Message);
+            if (_session.Config == null || !_session.ConfigValid)
+            {
+                _lastPreflight = _session.Preflight(false);
+                PreflightGrid.ItemsSource = _lastPreflight;
+                RefreshHome();
+                if (!File.Exists(_session.ConfigPath) &&
+                    MessageBox.Show(this, "Welcome. There is no configuration yet.\n\nRun the setup wizard now? It detects your domain, exception-GPO prefix, pilot group and current DISA GPOs, and asks you to confirm each value.",
+                                    Title, MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
+                    Dispatcher.BeginInvoke(new Action(() => OpenSetup()));
+                return;
+            }
+            MappingColumn.ItemsSource = _session.Config.Mappings;
+            RegisterPathText.Text = "File: " + _session.Config.ExceptionsRegisterPath;
+            AuditPathText.Text = "Append-only log: " + _session.Config.AuditLogPath;
+            bool dcdiag = DcDiagCheck.IsChecked == true && !_session.IsDemo;
+            RunOp("Checking the domain", () =>
+            {
+                if (!_session.IsDemo)
+                {
+                    try { _session.Connect(AddLog, AddCommand); }
+                    catch (Exception ex) { AddLog(LogLevel.Error, ex.Message); }
+                }
+                return _session.Preflight(dcdiag);
+            }, results =>
+            {
+                _lastPreflight = results;
+                PreflightGrid.ItemsSource = results;
+                var fails = results.Count(r => r.Status == CheckStatus.Fail);
+                AddLog(fails == 0 ? LogLevel.Success : LogLevel.Warning, $"Checks: {results.Count(r => r.Status == CheckStatus.Pass)} passed, {results.Count(r => r.Status == CheckStatus.Warning)} warnings, {fails} failed.");
+            });
         }
 
         private void Preflight_Click(object sender, RoutedEventArgs e)
         {
             if (!RequireEngine()) return;
-            bool dcdiag = DcDiagCheck.IsChecked == true;
-            RunOp("Pre-flight checks", () => _session.Preflight(dcdiag), r => { PreflightGrid.ItemsSource = r; _lastPreflight = r; });
+            bool dcdiag = DcDiagCheck.IsChecked == true && !_session.IsDemo;
+            RunOp("Running checks", () => _session.Preflight(dcdiag), r => { _lastPreflight = r; PreflightGrid.ItemsSource = r; });
         }
 
-        private void Setup_Click(object sender, RoutedEventArgs e) => OpenSetup();
+        private void HealthCard_Click(object sender, RoutedEventArgs e) => ShowView(HealthView);
 
-        /// <summary>Opens the setup wizard (pre-filled from the current config, if any) and reloads on save.</summary>
-        public void OpenSetup()
+        private void RefreshHealthCard()
         {
-            if (IsBusy) return;
-            var path = _session.IsDemo ? Path.Combine(Path.GetDirectoryName(_session.ConfigPath), "config.setup-demo.json") : _session.ConfigPath;
-            var wizard = new SetupWindow(this, path, _session.ConfigValid ? _session.Config : null, _session.IsDemo ? _session.Directory : null, _session.IsDemo);
-            if (wizard.ShowDialog() != true) return;
-            AddLog(LogLevel.Success, "Config saved: " + wizard.SavedPath);
-            if (_session.IsDemo) { MessageBox.Show(this, "Demo: config written to " + wizard.SavedPath + " (not used).", Title); return; }
-            _session.LoadConfig();
-            Connect();
+            if (_lastPreflight == null) { HealthTitle.Text = "Checking the domain ..."; HealthDetail.Text = ""; HealthDot.Background = (Brush)FindResource("Muted"); return; }
+            var fails = _lastPreflight.Where(r => r.Status == CheckStatus.Fail).ToList();
+            var warns = _lastPreflight.Where(r => r.Status == CheckStatus.Warning).ToList();
+            HealthDot.Background = (Brush)FindResource(fails.Count > 0 ? "Danger" : warns.Count > 0 ? "Warn" : "Success");
+            HealthTitle.Text = fails.Count > 0 ? $"{fails.Count} problem(s) need fixing" : warns.Count > 0 ? "Ready, with warnings" : "Domain checks passed";
+            HealthDetail.Text = fails.Count > 0 ? fails[0].Name + ": " + fails[0].Detail
+                              : warns.Count > 0 ? string.Join("; ", warns.Take(2).Select(w => w.Name)) + ". Click for details."
+                              : $"{_session.Config?.Domain} via {_session.Directory?.Server}. Click for details.";
         }
 
-        private void ReloadConfig_Click(object sender, RoutedEventArgs e)
+        // ================================================================ home
+
+        private sealed class HistoryRow
         {
-            if (IsBusy) return;
-            if (_session.IsDemo) { MessageBox.Show(this, "Demo mode uses a generated config; restart without /demo to use your own.", Title); return; }
-            _session.LoadConfig();
-            Connect();
+            public RunState State { get; set; }
+            public string Release { get; set; }
+            public string Status { get; set; }
+            public int Items { get; set; }
+            public string Created { get; set; }
         }
 
-        private void OpenConfig_Click(object sender, RoutedEventArgs e)
+        public sealed class StageItem
         {
-            if (File.Exists(_session.ConfigPath)) Process.Start("notepad.exe", "\"" + _session.ConfigPath + "\"");
-            else MessageBox.Show(this, "Config file not found: " + _session.ConfigPath, Title);
+            public int Index { get; set; }
+            public string Name { get; set; }
+            public string Badge { get; set; }
+            public Brush Fill { get; set; }
+            public Brush Stroke { get; set; }
+            public Brush BadgeInk { get; set; }
+            public FontWeight Weight { get; set; }
+            public TextDecorationCollection Underline { get; set; }
         }
 
-        private void OpenWorking_Click(object sender, RoutedEventArgs e) => Open(_session.Config?.WorkingFolder);
+        private static readonly string[] StageNames = { "Prepare", "Review", "Pilot", "Promote" };
 
-        private void RefreshRuns_Click(object sender, RoutedEventArgs e) => RefreshRuns(false);
-
-        private void RefreshRuns(bool autoResume)
+        private List<StageItem> Stages(Stage actual, Stage? viewing)
         {
-            if (_session.Config == null) return;
-            var runs = new RunStore(_session.Config.RunsFolder).LoadAll(m => AddLog(LogLevel.Warning, m));
-            RunsGrid.ItemsSource = runs.Select(r => new RunRow { State = r, Status = r.StatusText(_session.Config.SoakDays, DateTime.UtcNow) }).ToList();
-            if (autoResume && _run == null)
+            var accent = (Brush)FindResource("Accent");
+            var success = (Brush)FindResource("Success");
+            var line = new SolidColorBrush(Color.FromRgb(0xCB, 0xD2, 0xDB));
+            var list = new List<StageItem>();
+            for (int i = 0; i < 4; i++)
             {
-                var active = runs.Where(r => r.Phase != RunPhase.Closed && r.Phase != RunPhase.RolledBack).ToList();
-                if (active.Count == 1 && Engine != null)
+                bool done = (int)actual > i, current = (int)actual == i;
+                list.Add(new StageItem
                 {
-                    AddLog(LogLevel.Info, $"Resuming active run {active[0].RunId} ({active[0].Phase}).");
-                    ResumeRun(active[0].RunId);
-                }
-                else if (active.Count > 1) AddLog(LogLevel.Warning, $"{active.Count} runs are open; select one on the Start page and click Resume.");
+                    Index = i, Name = StageNames[i], Badge = done ? "✓" : (i + 1).ToString(),
+                    Fill = done ? success : current ? accent : Brushes.White,
+                    Stroke = done ? success : current ? accent : line,
+                    BadgeInk = done || current ? Brushes.White : (Brush)FindResource("Muted"),
+                    Weight = viewing.HasValue && (int)viewing.Value == i ? FontWeights.Bold : current ? FontWeights.SemiBold : FontWeights.Normal,
+                    Underline = viewing.HasValue && (int)viewing.Value == i ? TextDecorations.Underline : null,
+                });
+            }
+            return list;
+        }
+
+        private List<RunState> LoadRuns() =>
+            _session.Config == null ? new List<RunState>() : new RunStore(_session.Config.RunsFolder).LoadAll(m => AddLog(LogLevel.Warning, m));
+
+        private RunState ActiveRun(List<RunState> runs) =>
+            runs.FirstOrDefault(r => r.Phase != RunPhase.Closed && r.Phase != RunPhase.RolledBack);
+
+        private void RefreshHome()
+        {
+            RefreshHealthCard();
+            var runs = LoadRuns();
+            var soak = _session.Config?.SoakDays ?? 14;
+            var tl = Core.Timeline.Build(runs, soak, DateTime.Now);
+            Calendar.Timeline = tl;
+            NextReleaseText.Text = $"Next DISA release expected: {tl.NextExpectedRelease:MMMM yyyy}";
+            HistoryGrid.ItemsSource = runs.Select(r => new HistoryRow
+            {
+                State = r, Release = Core.Timeline.QuarterTitle(r).Replace(" release", ""),
+                Status = r.StatusText(soak, DateTime.UtcNow), Items = r.Items.Count(i => i.NewGpoId != null),
+                Created = r.CreatedUtc.ToLocalTime().ToString("yyyy-MM-dd"),
+            }).ToList();
+
+            var active = ActiveRun(runs);
+            if (active == null)
+            {
+                CurrentTitle.Text = "No update in progress";
+                CurrentStatus.Text = $"When DISA's {tl.NextExpectedRelease:MMMM yyyy} GPO package has been transferred in, start the update here.";
+                MiniStepper.ItemsSource = null;
+                ContinueButton.Content = "Start a new quarterly update";
+                CurrentReportButton.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                var stage = Core.Timeline.StageOf(active);
+                CurrentTitle.Text = Core.Timeline.QuarterTitle(active);
+                CurrentStatus.Text = StageSummary(active, stage);
+                MiniStepper.ItemsSource = Stages(stage, null);
+                ContinueButton.Content = stage == Stage.Done ? "Open this update" : "Continue: " + StageNames[(int)stage] + "  →";
+                CurrentReportButton.Visibility = Visibility.Visible;
             }
         }
 
-        private void ResumeRun_Click(object sender, RoutedEventArgs e)
+        private string StageSummary(RunState r, Stage stage)
         {
-            if (!RequireEngine()) return;
-            if (!(RunsGrid.SelectedItem is RunRow row)) { MessageBox.Show(this, "Select a run first.", Title); return; }
-            ResumeRun(row.RunId);
+            var soak = _session.Config?.SoakDays ?? 14;
+            switch (stage)
+            {
+                case Stage.Prepare: return "Package loaded. Next: import the new GPOs.";
+                case Stage.Review: return $"{r.Items.Count(i => i.NewGpoId != null)} new GPO(s) imported, not linked yet. Next: review what changed.";
+                case Stage.Pilot: return "Reviewed. Next: link the new GPOs to the pilot machines.";
+                case Stage.Promote:
+                    var s = r.StatusText(soak, DateTime.UtcNow);
+                    var gate = r.Gate == null ? "no scan results imported yet" : r.Gate.Passed ? "scan gate passed" : $"{r.Gate.BlockingCount} blocking finding(s)";
+                    return $"{s}; {gate}.";
+                default: return r.StatusText(soak, DateTime.UtcNow) + ". The previous version is disabled, kept for rollback.";
+            }
         }
 
-        private void ResumeRun(string runId)
+        private void NavHome_Click(object sender, RoutedEventArgs e) => ShowView(HomeView);
+        private void NavRegister_Click(object sender, RoutedEventArgs e) => ShowView(RegisterView);
+        private void NavAudit_Click(object sender, RoutedEventArgs e) => ShowView(AuditView);
+        private void NavHealth_Click(object sender, RoutedEventArgs e) => ShowView(HealthView);
+        private void NavCleanup_Click(object sender, RoutedEventArgs e) { ShowView(CleanupView); FindCleanup_Click(null, null); }
+
+        private void Continue_Click(object sender, RoutedEventArgs e)
         {
-            RunOp("Resuming run " + runId, () =>
+            var active = ActiveRun(LoadRuns());
+            if (active == null) NewUpdate_Click(null, null);
+            else OpenRun(active.RunId);
+        }
+
+        private void NewUpdate_Click(object sender, RoutedEventArgs e)
+        {
+            if (!RequireEngine()) return;
+            var active = ActiveRun(LoadRuns());
+            if (active != null && Core.Timeline.StageOf(active) != Stage.Done &&
+                MessageBox.Show(this, $"The {Core.Timeline.QuarterTitle(active)} update is still in progress ({active.StatusText(_session.Config.SoakDays, DateTime.UtcNow)}).\n\nStart another update anyway? (The open one is kept.)",
+                                Title, MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+                return;
+            _run = null; _scan = null; _review = null;
+            _backupRows = new List<BackupRow>(); _storeItems = new List<CentralStoreItem>();
+            BackupsGrid.ItemsSource = null; HashText.Text = ""; StoreSummary.Text = "";
+            ZipPathText.Text = "The tool reads it, shows its SHA-256 and finds every GPO inside. Nothing changes yet.";
+            _zipPath = null;
+            _viewStage = Stage.Prepare;
+            ShowView(UpdateView);
+            RefreshUpdate();
+        }
+
+        private HistoryRow SelectedHistory()
+        {
+            if (HistoryGrid.SelectedItem is HistoryRow row) return row;
+            MessageBox.Show(this, "Select an update in the History list first.", Title);
+            return null;
+        }
+
+        private void HistoryOpen_Click(object sender, RoutedEventArgs e) { var r = SelectedHistory(); if (r != null) OpenRun(r.State.RunId); }
+
+        private void HistoryReport_Click(object sender, RoutedEventArgs e)
+        {
+            var r = SelectedHistory();
+            if (r == null || !RequireEngine()) return;
+            RunOp("Writing run report", () => Engine.WriteRunReport(Engine.Store.Load(r.State.RunId)), Open);
+        }
+
+        private void CurrentReport_Click(object sender, RoutedEventArgs e)
+        {
+            var active = ActiveRun(LoadRuns());
+            if (active == null || !RequireEngine()) return;
+            RunOp("Writing run report", () => Engine.WriteRunReport(Engine.Store.Load(active.RunId)), Open);
+        }
+
+        private void HistoryRollback_Click(object sender, RoutedEventArgs e)
+        {
+            var r = SelectedHistory();
+            if (r == null || !RequireEngine()) return;
+            var run = Engine.Store.Load(r.State.RunId);
+            Rollback(run);
+        }
+
+        private void HistoryClose_Click(object sender, RoutedEventArgs e)
+        {
+            var r = SelectedHistory();
+            if (r == null || !RequireEngine()) return;
+            if (MessageBox.Show(this, $"Mark the {r.Release} update as finished? It stays on disk for audit and reports.", Title, MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
+            RunOp("Closing update", () => Engine.CloseRun(Engine.Store.Load(r.State.RunId)));
+        }
+
+        // ================================================================ update view
+
+        private void OpenRun(string runId)
+        {
+            if (!RequireEngine()) return;
+            RunOp("Opening update", () =>
             {
                 var run = Engine.Store.Load(runId);
                 PackageScanResult scan = null;
-                try { scan = Engine.RescanPackage(run); }
-                catch (Exception ex) { AddLog(LogLevel.Warning, ex.Message + " Steps 1-3 are unavailable for this run; later steps still work."); }
-                return Tuple.Create(run, scan);
+                List<CentralStoreItem> store = new List<CentralStoreItem>();
+                try
+                {
+                    scan = Engine.RescanPackage(run);
+                    if (Core.Timeline.StageOf(run) == Stage.Prepare) store = Engine.CompareCentralStore(scan);
+                }
+                catch (Exception ex) { AddLog(LogLevel.Warning, ex.Message); }
+                return Tuple.Create(run, scan, store);
             }, t =>
             {
-                _run = t.Item1;
-                _scan = t.Item2;
-                _review = null;
-                BuildBackupRows();
+                _run = t.Item1; _scan = t.Item2; _storeItems = t.Item3; _review = null;
                 ZipPathText.Text = _run.Package?.ZipPath;
                 HashText.Text = HashLine(_run.Package);
-                AddLog(LogLevel.Success, $"Run {_run.RunId} resumed: {_run.StatusText(_session.Config.SoakDays, DateTime.UtcNow)}");
-                RunChanged?.Invoke();
-                GoTo(NextPanelFor(_run));
+                BuildBackupRows();
+                ShowStoreSummary();
+                _viewStage = Core.Timeline.StageOf(_run) == Stage.Done ? Stage.Done : Core.Timeline.StageOf(_run);
+                ShowView(UpdateView);
+                EnterStage(_viewStage);
             });
         }
 
-        private static string NextPanelFor(RunState r)
+        private void Stage_Click(object sender, RoutedEventArgs e)
         {
-            switch (r.Phase)
+            if (!((sender as FrameworkElement)?.Tag is int i)) return;
+            var actual = _run == null ? Stage.Prepare : Core.Timeline.StageOf(_run);
+            if (i > (int)actual) { StatusText.Text = $"Finish '{StageNames[(int)actual]}' first."; return; }
+            EnterStage((Stage)i);
+        }
+
+        /// <summary>Shows a stage and loads what it needs (review runs automatically the first time).</summary>
+        private void EnterStage(Stage stage)
+        {
+            _viewStage = stage;
+            RefreshUpdate();
+            if (_run == null || Engine == null) return;
+            if (stage == Stage.Review)
             {
-                case RunPhase.PackageLoaded: return "PanelStore";
-                case RunPhase.CentralStoreUpdated: return "PanelImport";
-                case RunPhase.Imported: return "PanelReview";
-                case RunPhase.Reviewed: return "PanelPilot";
-                case RunPhase.Piloted: return "PanelScans";
-                case RunPhase.Promoted: return "PanelPromote";
-                default: return "PanelStart";
+                bool reviewed = _run.History.Any(h => h.Phase == RunPhase.Reviewed.ToString());
+                if (_review == null && !reviewed) Review_Click(null, null);
+                else if (_review == null) RunOp("Loading review", () => Engine.Review(_run), r => { _review = r; ShowReview(); });
+                else ShowReview();
+            }
+            else if (stage == Stage.Promote)
+            {
+                var run = _run;
+                RunOp("Checking promotion gate", () => Engine.EvaluatePromotionChecks(run), ShowPromoteChecks);
             }
         }
 
-        private void NewRun_Click(object sender, RoutedEventArgs e)
+        private void RefreshUpdate()
         {
-            _run = null; _scan = null; _review = null; _gate = null;
-            _backupRows = new List<BackupRow>();
-            BackupsGrid.ItemsSource = null;
-            ZipPathText.Text = "(no file selected)";
-            HashText.Text = "";
-            RefreshRunViews();
-            GoTo("PanelLoad");
-        }
+            var actual = _run == null ? Stage.Prepare : Core.Timeline.StageOf(_run);
+            UpdateTitle.Text = _run == null ? "New quarterly update" : Core.Timeline.QuarterTitle(_run) + "  •  " + Path.GetFileName(_run.Package?.ZipPath ?? "");
+            Stepper.ItemsSource = Stages(actual, _viewStage == Stage.Done ? (Stage?)null : _viewStage);
+            RollbackButton.Visibility = _run != null && Engine != null && Engine.RollbackableItems(_run).Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
-        private void RunReport_Click(object sender, RoutedEventArgs e)
-        {
-            if (!RequireEngine()) return;
-            var run = (RunsGrid.SelectedItem as RunRow)?.State ?? _run;
-            if (run == null) { MessageBox.Show(this, "Select a run.", Title); return; }
-            RunOp("Writing run report", () => Engine.WriteRunReport(Engine.Store.Load(run.RunId)), Open);
-        }
+            PreparePanel.Visibility = _viewStage == Stage.Prepare ? Visibility.Visible : Visibility.Collapsed;
+            ReviewPanel.Visibility = _viewStage == Stage.Review ? Visibility.Visible : Visibility.Collapsed;
+            PilotPanel.Visibility = _viewStage == Stage.Pilot ? Visibility.Visible : Visibility.Collapsed;
+            PromotePanel.Visibility = _viewStage == Stage.Promote ? Visibility.Visible : Visibility.Collapsed;
+            DonePanel.Visibility = _viewStage == Stage.Done ? Visibility.Visible : Visibility.Collapsed;
 
-        private void CloseRun_Click(object sender, RoutedEventArgs e)
-        {
-            if (!RequireEngine()) return;
-            if (!(RunsGrid.SelectedItem is RunRow row)) { MessageBox.Show(this, "Select a run.", Title); return; }
-            if (MessageBox.Show(this, $"Mark run {row.RunId} as closed? It stays on disk for audit and can still be reported on.", Title, MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
-            RunOp("Closing run", () => Engine.CloseRun(Engine.Store.Load(row.RunId)), () =>
+            var items = _run?.Items.Where(i => i.NewGpoId != null).ToList() ?? new List<RunItem>();
+            PilotGrid.ItemsSource = items.Select(i => new ItemRow(i, false)).ToList();
+            PromoteGrid.ItemsSource = items.Select(i => new ItemRow(i, false)).ToList();
+            ShowSoak();
+            ShowGate();
+
+            bool changesAd = false;
+            string heading = "", explain = "", action = null, hint = "";
+            bool enabled = true, primary = true;
+            switch (_viewStage)
             {
-                if (_run?.RunId == row.RunId) _run = Engine.Store.Load(row.RunId);
-                RefreshRuns(false);
-                RunChanged?.Invoke();
-            });
+                case Stage.Prepare:
+                    heading = "1. Prepare: load DISA's package and import the new GPOs";
+                    explain = "Drop the zip. The tool lists every GPO in it and the name each will get (with its version, e.g. v1r4). Red rows match none of your mappings and are skipped unless you pick one. Matching uses the names inside the package, not this computer.";
+                    changesAd = true;
+                    if (_run == null)
+                    {
+                        action = "Load package";
+                        enabled = !string.IsNullOrEmpty(_zipPath);
+                        hint = enabled ? "Reads the zip. Nothing changes in AD." : "Drop the DISA zip above, or click Browse.";
+                    }
+                    else if (actual == Stage.Prepare)
+                    {
+                        var n = _backupRows.Count(r => !r.Skip);
+                        action = $"Import {n} new GPO(s)";
+                        enabled = n > 0;
+                        hint = "Backs up all GPOs, updates the Central Store if needed, then creates new GPOs. Never overwrites an existing GPO; links nothing.";
+                    }
+                    else { action = "Next: Review  →"; hint = "✓ Imported."; primary = false; }
+                    break;
+                case Stage.Review:
+                    heading = "2. Review: what DISA changed, and what it means for your exceptions";
+                    explain = "Each new GPO is compared with the version in use. Red rows are user rights / restricted groups that one of your exception GPOs replaces: its list must contain every STIG entry. Yellow rows are exceptions to look at.";
+                    action = "Next: Pilot  →";
+                    hint = _review == null ? "Running the review ..." : "When you have read the flagged rows, continue. The full report is saved for your records.";
+                    break;
+                case Stage.Pilot:
+                    heading = "3. Pilot: try the new GPOs on pilot machines";
+                    explain = "Links each new GPO to the pilot OUs (or to production filtered to the pilot group), always below your exception GPOs. Then gpupdate and scan the pilot machines, test, and let them soak. You can close the tool meanwhile; this update is saved.";
+                    changesAd = true;
+                    if (actual == Stage.Pilot) { action = "Start pilot"; hint = "Shows the exact links before anything changes."; }
+                    else { action = "Next: Promote  →"; primary = SoakDone() && (_run?.Gate?.Passed ?? false); hint = primary ? "✓ Soak complete and scan gate passed." : "Promote when the soak is over and the scan gate passes."; }
+                    break;
+                case Stage.Promote:
+                    heading = "4. Promote: move the new GPOs to production";
+                    explain = "Links each new GPO to its production OUs, disables (does not delete) the previous version so rollback is one click, and removes the pilot links. Then refresh policy on the computers.";
+                    changesAd = true;
+                    action = "Promote to production"; hint = "You will see every change and type PROMOTE to confirm.";
+                    break;
+                default:
+                    heading = "Done";
+                    explain = "This quarter's GPOs are in production. Run a production scan (SCC / Evaluate-STIG), and next quarter use Clean up old versions.";
+                    action = "Back to Home"; primary = false;
+                    DoneDetail.Text = (_run == null ? "" : _run.StatusText(_session.Config?.SoakDays ?? 14, DateTime.UtcNow) + ". ") +
+                                      "The previous version's links are disabled and kept, so Roll back puts everything back in one step.";
+                    break;
+            }
+            StageHeading.Text = heading;
+            StageExplain.Text = explain;
+            ChangesPillText.Text = changesAd ? "Changes AD (asks first)" : "No AD changes";
+            ChangesPill.Background = (Brush)FindResource(changesAd ? "WarnSoft" : "SuccessSoft");
+            PrimaryAction.Content = action;
+            PrimaryAction.IsEnabled = enabled;
+            PrimaryAction.Style = (Style)FindResource(primary ? "PrimaryButton" : typeof(Button));
+            PrimaryHint.Text = hint;
         }
 
-        // ================================================================ 1. load package
+        private bool SoakDone() =>
+            _run?.PilotStartedUtc != null && (DateTime.UtcNow - _run.PilotStartedUtc.Value).TotalDays >= (_session.Config?.SoakDays ?? 14);
+
+        private void ShowSoak()
+        {
+            var soak = _session.Config?.SoakDays ?? 14;
+            SoakBar.Maximum = Math.Max(1, soak);
+            if (_run?.PilotStartedUtc == null)
+            {
+                SoakDayText.Text = "Pilot not started";
+                SoakEndText.Text = $"Soak period: {soak} days";
+                SoakBar.Value = 0;
+                return;
+            }
+            var day = (int)Math.Floor((DateTime.UtcNow - _run.PilotStartedUtc.Value).TotalDays) + 1;
+            SoakDayText.Text = day > soak ? "Soak complete" : $"Day {day} of {soak}";
+            SoakEndText.Text = "Soak ends " + _run.PilotStartedUtc.Value.ToLocalTime().AddDays(soak).ToString("dddd d MMMM");
+            SoakBar.Value = Math.Min(day, soak);
+        }
+
+        private void ShowGate()
+        {
+            if (_run?.Gate == null)
+            {
+                GateText.Text = (_session.Config?.RequireScanGate ?? true) ? "Scan gate: no pilot results imported yet (required before Promote)." : "Scan gate: optional (off).";
+                GateText.Foreground = (Brush)FindResource("Muted");
+            }
+            else
+            {
+                GateText.Text = (_run.Gate.Passed ? "✓ Scan gate passed: " : "✖ Scan gate failed: ") + _run.Gate.Summary;
+                GateText.Foreground = (Brush)FindResource(_run.Gate.Passed ? "Success" : "Danger");
+            }
+        }
+
+        private void PrimaryAction_Click(object sender, RoutedEventArgs e)
+        {
+            var actual = _run == null ? Stage.Prepare : Core.Timeline.StageOf(_run);
+            switch (_viewStage)
+            {
+                case Stage.Prepare:
+                    if (_run == null) LoadPackage();
+                    else if (actual == Stage.Prepare) PushImport();
+                    else EnterStage(Stage.Review);
+                    break;
+                case Stage.Review: EnterStage(Stage.Pilot); break;
+                case Stage.Pilot:
+                    if (actual == Stage.Pilot) PushPilot();
+                    else EnterStage(Stage.Promote);
+                    break;
+                case Stage.Promote: PushPromote(); break;
+                default: ShowView(HomeView); break;
+            }
+        }
+
+        // ---------------------------------------------------------------- prepare
 
         private void Drop_DragOver(object sender, DragEventArgs e)
         {
@@ -572,201 +606,176 @@ namespace StigGpoManager
 
         private void ZipDrop_Drop(object sender, DragEventArgs e)
         {
-            var files = e.Data.GetData(DataFormats.FileDrop) as string[];
-            var zip = files?.FirstOrDefault(f => f.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
+            var zip = (e.Data.GetData(DataFormats.FileDrop) as string[])?.FirstOrDefault(f => f.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
             if (zip == null) { MessageBox.Show(this, "Drop a .zip file.", Title); return; }
             SetZip(zip);
         }
 
         private void BrowseZip_Click(object sender, RoutedEventArgs e)
         {
-            var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "DISA GPO package (*.zip)|*.zip", Title = "Select DISA GPO package" };
+            var dlg = new Microsoft.Win32.OpenFileDialog { Filter = "DISA GPO package (*.zip)|*.zip", Title = "Select DISA's GPO package" };
             if (dlg.ShowDialog(this) == true) SetZip(dlg.FileName);
         }
 
         private void SetZip(string path)
         {
+            if (_run != null) { MessageBox.Show(this, "This update already has its package. Start a new quarterly update for another package.", Title); return; }
             _zipPath = path;
             ZipPathText.Text = path;
-        }
-
-        private void UseSuggestions_Click(object sender, RoutedEventArgs e)
-        {
-            var rows = _backupRows.Where(r => r.Candidate.Mapping == null && r.Candidate.SuggestedMapping != null).ToList();
-            if (rows.Count == 0) { MessageBox.Show(this, "There are no suggestions for the red rows. Pick a mapping in the Mapping column, or add one in the setup wizard.", Title); return; }
-            foreach (var r in rows) r.Mapping = r.Candidate.SuggestedMapping;
-            MappingResolver.FlagConflicts(_backupRows.Select(r => r.Candidate).ToList());
-            AddLog(LogLevel.Info, $"Assigned suggested mappings to {rows.Count} backup(s). Check the New GPO name column before importing.");
-            BackupsGrid.Items.Refresh();
+            RefreshUpdate();
+            LoadPackage();
         }
 
         private static string HashLine(PackageRecord p)
         {
             if (p == null) return "";
-            var match = p.HashMatches == null ? "(no expected hash given)" : p.HashMatches == true ? "MATCHES expected hash" : "*** DOES NOT MATCH the expected hash ***";
-            return $"SHA-256: {p.Sha256}   {match}";
+            var match = p.HashMatches == null ? "(no expected hash given)" : p.HashMatches == true ? "✓ matches the expected hash" : "✖ DOES NOT MATCH the expected hash";
+            return $"SHA-256 {p.Sha256}   {match}";
         }
 
-        private void LoadPackage_Click(object sender, RoutedEventArgs e)
+        private void LoadPackage()
         {
-            if (!RequireEngine()) return;
-            if (string.IsNullOrEmpty(_zipPath)) { MessageBox.Show(this, "Drop or browse to the DISA zip first.", Title); return; }
-            if (_run != null && _run.Phase < RunPhase.Closed &&
-                MessageBox.Show(this, $"Run {_run.RunId} is open. Start a NEW run for this package? (The open run is kept and can be resumed.)", Title, MessageBoxButton.YesNo) != MessageBoxResult.Yes)
-                return;
+            if (!RequireEngine() || string.IsNullOrEmpty(_zipPath)) return;
             var zip = _zipPath;
             var expected = ExpectedHashBox.Text;
-            RunOp("Loading package", () =>
+            RunOp("Reading the package", () =>
             {
                 var run = Engine.CreateRun(zip, expected, out var scan);
-                return Tuple.Create(run, scan);
+                return Tuple.Create(run, scan, Engine.CompareCentralStore(scan));
             }, t =>
             {
-                _run = t.Item1;
-                _scan = t.Item2;
-                _review = null; _gate = null;
+                _run = t.Item1; _scan = t.Item2; _storeItems = t.Item3; _review = null;
                 HashText.Text = HashLine(_run.Package);
-                HashText.Foreground = _run.Package.HashMatches == false ? Brushes.Firebrick : Brushes.Black;
+                HashText.Foreground = (Brush)FindResource(_run.Package.HashMatches == false ? "Danger" : "Ink");
                 BuildBackupRows();
-                RefreshRuns(false);
-                RunChanged?.Invoke();
+                ShowStoreSummary();
                 if (_run.Package.HashMatches == false)
-                    MessageBox.Show(this, "The package hash does NOT match the expected value. Do not continue unless you have resolved this with the transfer record.", "Hash mismatch", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    MessageBox.Show(this, "The package hash does NOT match the expected value. Do not continue unless this is resolved with your transfer record.", "Hash mismatch", MessageBoxButton.OK, MessageBoxImage.Warning);
             });
         }
 
         private void BuildBackupRows()
         {
-            if (_scan == null || _session.Config == null) { BackupsGrid.ItemsSource = null; TemplateSummary.Text = ""; return; }
-            var candidates = MappingResolver.Resolve(_scan.Backups, _session.Config);
-            _backupRows = candidates.Select(c =>
+            if (_scan == null || _session.Config == null) { BackupsGrid.ItemsSource = null; return; }
+            _backupRows = MappingResolver.Resolve(_scan.Backups, _session.Config).Select(c =>
             {
                 var done = _run?.Items.FirstOrDefault(i => i.BackupId == c.Backup.BackupId && i.NewGpoId != null);
-                return new BackupRow(c, done != null ? $"Already imported in this run as '{done.NewGpoName}'." : null);
+                return new BackupRow(c, done != null ? $"Imported as '{done.NewGpoName}'" : null);
             }).ToList();
+            foreach (var r in _backupRows) r.PropertyChanged += (s, e) => RefreshUpdate();
             BackupsGrid.ItemsSource = _backupRows;
-            TemplateSummary.Text = $"{_scan.Backups.Count} GPO backups; {_scan.Templates.Count(t => t.Kind == TemplateKind.Admx)} ADMX and {_scan.Templates.Count(t => t.Kind == TemplateKind.Adml)} {_session.Config.Language} ADML templates found in {_scan.ExtractedPath}."
-                                   + (_scan.Warnings.Count > 0 ? "  Warnings: " + string.Join(" | ", _scan.Warnings) : "");
         }
 
-        // ================================================================ 2. central store
-
-        private void CompareStore_Click(object sender, RoutedEventArgs e)
+        private void ShowStoreSummary()
         {
-            if (!RequireRun()) return;
-            if (_scan == null) { MessageBox.Show(this, "The package for this run is not available.", Title); return; }
-            RunOp("Comparing Central Store", () => Engine.CompareCentralStore(_scan), items =>
+            if (_storeItems.Count == 0) { StoreSummary.Text = _run == null ? "" : "Central Store: compared when the update was prepared."; return; }
+            int copy = _storeItems.Count(i => i.WillCopy), newer = _storeItems.Count(i => i.Status == CentralStoreStatus.SkippedStoreNewer && !i.OverrideDowngrade);
+            StoreSummary.Text = copy == 0
+                ? $"Central Store: up to date ({_storeItems.Count} templates checked){(newer > 0 ? $"; {newer} kept because the store copy is newer" : "")}."
+                : $"Central Store: {copy} template file(s) will be added or updated when you import (the store is backed up first){(newer > 0 ? $"; {newer} kept because the store copy is newer" : "")}.";
+        }
+
+        private void StoreDetails_Click(object sender, RoutedEventArgs e)
+        {
+            if (_storeItems.Count == 0) { MessageBox.Show(this, "Load a package first.", Title); return; }
+            var rows = _storeItems.Select(i => new StoreRow(i)).ToList();
+            var grid = new DataGrid { ItemsSource = rows, AutoGenerateColumns = false, CanUserAddRows = false };
+            grid.Columns.Add(new DataGridTextColumn { Header = "File", Binding = new System.Windows.Data.Binding("File"), IsReadOnly = true, Width = new DataGridLength(2, DataGridLengthUnitType.Star) });
+            grid.Columns.Add(new DataGridTextColumn { Header = "Status", Binding = new System.Windows.Data.Binding("Status"), IsReadOnly = true, Width = new DataGridLength(1.5, DataGridLengthUnitType.Star) });
+            grid.Columns.Add(new DataGridTextColumn { Header = "Package date", Binding = new System.Windows.Data.Binding("PackageDate"), IsReadOnly = true, Width = 130 });
+            grid.Columns.Add(new DataGridTextColumn { Header = "Store date", Binding = new System.Windows.Data.Binding("StoreDate"), IsReadOnly = true, Width = 130 });
+            grid.Columns.Add(new DataGridCheckBoxColumn { Header = "Overwrite newer store copy", Binding = new System.Windows.Data.Binding("Override") { UpdateSourceTrigger = System.Windows.Data.UpdateSourceTrigger.PropertyChanged }, Width = 170 });
+            var w = new Window { Title = "Central Store templates", Owner = this, Width = 900, Height = 520, Content = new DockPanel { Margin = new Thickness(12), Children = { grid } }, WindowStartupLocation = WindowStartupLocation.CenterOwner, FontFamily = new FontFamily("Segoe UI") };
+            w.ShowDialog();
+            ShowStoreSummary();
+        }
+
+        private void UseSuggestions_Click(object sender, RoutedEventArgs e)
+        {
+            var rows = _backupRows.Where(r => r.Candidate.Mapping == null && r.Candidate.SuggestedMapping != null).ToList();
+            if (rows.Count == 0) { MessageBox.Show(this, "No suggestions for the red rows. Pick a mapping in the Mapping column, or add one with Edit mappings.", Title); return; }
+            foreach (var r in rows) r.Mapping = r.Candidate.SuggestedMapping;
+            MappingResolver.FlagConflicts(_backupRows.Select(r => r.Candidate).ToList());
+            AddLog(LogLevel.Info, $"Assigned suggested mappings to {rows.Count} GPO(s). Check 'Will be created as' before importing.");
+            BackupsGrid.Items.Refresh();
+            RefreshUpdate();
+        }
+
+        private void PushImport()
+        {
+            var run = _run;
+            var selected = _backupRows.Where(r => !r.Skip).Select(r => r.Candidate).ToList();
+            var store = _storeItems.ToList();
+            Push("Import new GPOs", () =>
             {
-                _storeRows = items.Select(i => new StoreRow(i)).ToList();
-                ApplyStoreFilter();
-                StoreSummary.Text = $"New {items.Count(i => i.Status == CentralStoreStatus.New)}, Updated {items.Count(i => i.Status == CentralStoreStatus.Updated)}, Unchanged {items.Count(i => i.Status == CentralStoreStatus.Unchanged)}, Skipped (store newer) {items.Count(i => i.Status == CentralStoreStatus.SkippedStoreNewer)}";
-                if (!items.Any(i => i.WillCopy))
-                {
-                    Engine.MarkCentralStoreCurrent(_run);
-                    AddLog(LogLevel.Success, "Central Store is already up to date; nothing to copy. Step complete.");
-                    RefreshSteps();
-                }
-            });
-        }
-
-        private void StoreFilter_Changed(object sender, RoutedEventArgs e) => ApplyStoreFilter();
-
-        private void ApplyStoreFilter()
-        {
-            if (StoreGrid == null) return;
-            StoreGrid.ItemsSource = StoreHideUnchanged.IsChecked == true
-                ? _storeRows.Where(r => r.Item.Status != CentralStoreStatus.Unchanged).ToList()
-                : _storeRows;
-        }
-
-        private void PushStore_Click(object sender, RoutedEventArgs e)
-        {
-            if (!RequireRun()) return;
-            if (_storeRows.Count == 0) { MessageBox.Show(this, "Click Compare first.", Title); return; }
-            var items = _storeRows.Select(r => r.Item).ToList();
-            var run = _run;
-            Push("Update Central Store", () => Engine.PlanCentralStore(items), r => Engine.ExecuteCentralStore(run, items), () => CompareStore_Click(null, null));
-        }
-
-        // ================================================================ 3. import
-
-        private List<ImportCandidate> SelectedCandidates() => _backupRows.Where(r => !r.Skip).Select(r => r.Candidate).ToList();
-
-        private void PushImport_Click(object sender, RoutedEventArgs e)
-        {
-            if (!RequireRun()) return;
-            var selected = SelectedCandidates();
-            var run = _run;
-            Push("Import GPOs", () => Engine.PlanImport(run, selected), r => Engine.ExecuteImport(run, selected), () =>
+                var plan = Engine.PlanImport(run, selected);
+                plan.Title = $"Import {selected.Count} new GPO(s)" + (store.Any(i => i.WillCopy) ? " and update the Central Store" : "");
+                var sp = Engine.PlanCentralStore(store);
+                plan.Changes.InsertRange(0, sp.Changes);
+                plan.Warnings.AddRange(sp.Warnings);
+                if (store.Any(i => i.WillCopy)) plan.Blockers.AddRange(sp.Blockers);
+                return plan;
+            }, r =>
+            {
+                if (store.Any(i => i.WillCopy)) Engine.ExecuteCentralStore(run, store);
+                else Engine.MarkCentralStoreCurrent(run);
+                Engine.ExecuteImport(run, selected);
+                _review = Engine.Review(run);
+            }, () =>
             {
                 BuildBackupRows();
-                AddLog(LogLevel.Info, "Next: step 4, Review.");
+                EnterStage(Stage.Review);
             });
         }
 
-        // ================================================================ 4. review
+        // ---------------------------------------------------------------- review
 
         private void Review_Click(object sender, RoutedEventArgs e)
         {
-            if (!RequireRun()) return;
+            if (_run == null || !RequireEngine()) return;
             var run = _run;
-            RunOp("Reviewing changes", () => Engine.Review(run), r =>
-            {
-                _review = r;
-                ReviewWarnings.ItemsSource = r.Warnings;
-                ApplyReviewFilter();
-                ReviewSummary.Text = $"{r.Rows.Count} rows; {r.Rows.Count(x => x.Severity == 2)} replacement-type warnings; {r.Rows.Count(x => x.Severity == 1)} exceptions to review. Report: {r.HtmlPath}";
-            });
+            RunOp("Reviewing changes", () => Engine.Review(run), r => { _review = r; ShowReview(); });
+        }
+
+        private void ShowReview()
+        {
+            if (_review == null) return;
+            ReviewWarnings.ItemsSource = _review.Warnings;
+            var attention = _review.Rows.Count(r => r.Severity > 0);
+            ChipAttentionText.Text = attention == 0 ? "✓ Nothing needs attention" : $"{attention} item(s) need attention";
+            ChipAttention.Background = (Brush)FindResource(attention == 0 ? "SuccessSoft" : "DangerSoft");
+            ChipChanges.Text = $"{_review.Rows.Count(r => r.Change == "Added")} added • {_review.Rows.Count(r => r.Change == "Changed")} changed • {_review.Rows.Count(r => r.Change == "Removed")} removed";
+            ApplyReviewFilter();
+            RefreshUpdate();
         }
 
         private void ReviewFilter_Changed(object sender, RoutedEventArgs e) => ApplyReviewFilter();
 
         private void ApplyReviewFilter()
         {
-            if (ReviewGrid == null || _review == null) return;
-            IEnumerable<ReviewRow> rows = _review.Rows;
-            switch (ReviewFilter.SelectedIndex)
+            if (_review == null || ReviewGrid == null) return;
+            var rows = ShowAllChanges.IsChecked == true || _review.Rows.All(r => r.Severity == 0) ? _review.Rows : _review.Rows.Where(r => r.Severity > 0).ToList();
+            ReviewGrid.ItemsSource = rows.OrderByDescending(r => r.Severity).Select(r =>
             {
-                case 1: rows = rows.Where(r => r.Severity > 0); break;
-                case 2: rows = rows.Where(r => r.Change == "Added"); break;
-                case 3: rows = rows.Where(r => r.Change == "Removed"); break;
-                case 4: rows = rows.Where(r => r.Change == "Changed"); break;
-            }
-            var q = ReviewSearch.Text?.Trim();
-            if (!string.IsNullOrEmpty(q))
-                rows = rows.Where(r => new[] { r.Setting, r.OldValue, r.NewValue, r.ExceptionGpo, r.NewGpo, r.Detail }.Any(s => s != null && s.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0));
-            ReviewGrid.ItemsSource = rows.OrderByDescending(r => r.Severity).ToList();
+                if (string.IsNullOrEmpty(r.Flag)) r.Flag = r.Change;
+                return r;
+            }).ToList();
         }
 
         private void OpenReviewReport_Click(object sender, RoutedEventArgs e) =>
-            Open(_review?.HtmlPath ?? _run?.Reports.LastOrDefault(p => p.EndsWith(".html") && Path.GetFileName(p).StartsWith("review-")));
+            Open(_review?.HtmlPath ?? _run?.Reports.LastOrDefault(p => Path.GetFileName(p).StartsWith("review-") && p.EndsWith(".html")));
 
-        private void OpenReports_Click(object sender, RoutedEventArgs e) => Open(_session.Config?.ReportsFolder);
+        // ---------------------------------------------------------------- pilot / scans
 
-        // ================================================================ 5. pilot
-
-        private void PushPilot_Click(object sender, RoutedEventArgs e)
+        private void PushPilot()
         {
-            if (!RequireRun()) return;
             var run = _run;
-            var items = Selected(PilotGrid).Where(i => Engine.PilotableItems(run).Contains(i)).ToList();
-            if (items.Count == 0) { MessageBox.Show(this, "No imported GPOs are selected for pilot.", Title); return; }
-            if (run.Phase < RunPhase.Reviewed &&
-                MessageBox.Show(this, "The review (step 4) has not been run for this run. Link to pilot anyway?", Title, MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
-                return;
-            Push("Pilot", () => Engine.PlanPilot(run, items), r => Engine.ExecutePilot(run, items, r.DcBackupConfirmed), () =>
-            {
-                RunChanged?.Invoke();
-                MessageBox.Show(this, "Pilot links are in place.\n\n" + string.Join("\n", StigEngine.PilotChecklist.Select(s => "  - " + s)), "Pilot - next steps", MessageBoxButton.OK, MessageBoxImage.Information);
-            });
+            var items = Engine.PilotableItems(run);
+            Push("Start pilot", () => Engine.PlanPilot(run, items), r => Engine.ExecutePilot(run, items, r.DcBackupConfirmed), () =>
+                MessageBox.Show(this, "Pilot links are in place.\n\n" + string.Join("\n", StigEngine.PilotChecklist.Select(s => "  • " + s)), "Pilot started", MessageBoxButton.OK, MessageBoxImage.Information));
         }
 
-        private static List<RunItem> Selected(DataGrid grid) =>
-            (grid.ItemsSource as IEnumerable<ItemRow> ?? Enumerable.Empty<ItemRow>()).Where(r => r.Selected).Select(r => r.Item).ToList();
-
-        // ================================================================ scans / gate
-
-        private string Stage => StageBaseline.IsChecked == true ? StigEngine.StageBaseline : StigEngine.StagePilot;
+        private string ScanStage => StageBaseline.IsChecked == true ? StigEngine.StageBaseline : StigEngine.StagePilot;
 
         private void ScanDrop_Drop(object sender, DragEventArgs e)
         {
@@ -781,10 +790,10 @@ namespace StigGpoManager
 
         private void ImportScans(string[] files)
         {
-            if (!RequireRun()) return;
+            if (_run == null || !RequireEngine()) return;
             var run = _run;
-            var stage = Stage;
-            RunOp($"Importing {files.Length} scan result file(s) as {stage}", () =>
+            var stage = ScanStage;
+            RunOp($"Importing {files.Length} scan result file(s)", () =>
             {
                 foreach (var f in files)
                 {
@@ -792,34 +801,14 @@ namespace StigGpoManager
                     catch (Exception ex) { AddLog(LogLevel.Error, $"{Path.GetFileName(f)}: {ex.Message}"); }
                 }
                 return Engine.EvaluateGate(run);
-            }, ShowGate);
+            }, ShowFindings);
         }
 
-        private void EvaluateGate_Click(object sender, RoutedEventArgs e)
+        private void ShowFindings(ScanGateResult g)
         {
-            if (!RequireRun()) return;
-            var run = _run;
-            RunOp("Evaluating gate", () => Engine.EvaluateGate(run), ShowGate);
-        }
-
-        private void ShowGate(ScanGateResult g)
-        {
-            _gate = g;
-            GateText.Text = (g.Passed ? "GATE PASS - " : "GATE FAIL - ") + g.Summary;
-            GateBorder.Background = new SolidColorBrush(g.Passed ? Color.FromRgb(0xDF, 0xF5, 0xDF) : Color.FromRgb(0xFF, 0xC9, 0xC9));
             FindingsGrid.ItemsSource = g.Blocking.Select(f => new FindingRow { Finding = f })
                                         .Concat(g.Expected.Select(x => new FindingRow { Finding = x.Finding, Entry = x.Entry })).ToList();
-            ChangesGrid.ItemsSource = g.StatusChanges;
-            PromoteGateText.Text = GateText.Text;
-            PromoteGateBorder.Background = GateBorder.Background;
-        }
-
-        private void RemoveScan_Click(object sender, RoutedEventArgs e)
-        {
-            if (!RequireRun() || !(ScansGrid.SelectedItem is ScanRow row)) return;
-            if (MessageBox.Show(this, $"Remove {row.OriginalFileName} from the gate? (The stored copy is kept as evidence.)", Title, MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
-            var run = _run;
-            RunOp("Removing scan import", () => { Engine.RemoveScanImport(run, row.Record); return Engine.EvaluateGate(run); }, ShowGate);
+            ShowGate();
         }
 
         private void AddToRegister_Click(object sender, RoutedEventArgs e)
@@ -832,108 +821,105 @@ namespace StigGpoManager
                 "Exception GPO (that implements the deviation)", "Justification", "POA&M / risk acceptance reference");
             if (dlg.ShowDialog() != true) return;
             var v = dlg.Values;
-            if (string.IsNullOrWhiteSpace(v[1])) { MessageBox.Show(this, "Justification is required; nothing added.", Title); return; }
+            if (string.IsNullOrWhiteSpace(v[1])) { MessageBox.Show(this, "A justification is required; nothing was added.", Title); return; }
             var register = Engine.LoadRegister();
             foreach (var r in rows.GroupBy(r => r.VulnId + "|" + r.Stig).Select(g => g.First()))
-                register.Entries.Add(new ExceptionEntry
+                register.Entries.Add(new ExceptionEntry { VulnId = r.VulnId, StigName = r.Stig, ExceptionGpo = v[0], Justification = v[1], PoamReference = v[2], DateAdded = DateTime.UtcNow, AddedBy = _session.User });
+            var run = _run;
+            RunOp("Saving exceptions register", () => { Engine.SaveRegister(register); return run == null ? null : Engine.EvaluateGate(run); }, g => { if (g != null) ShowFindings(g); });
+        }
+
+        // ---------------------------------------------------------------- promote / refresh / rollback
+
+        private void ShowPromoteChecks(List<CheckResult> results)
+        {
+            bool pass = results.All(r => r.Status != CheckStatus.Fail);
+            PromoteGateText.Text = results.Count == 0 ? "No promotion checks configured."
+                : string.Join(Environment.NewLine, results.Select(r => (r.Status == CheckStatus.Pass ? "✓ " : r.Status == CheckStatus.Fail ? "✖ " : "! ") + r.Name + ": " + r.Detail));
+            PromoteGateBorder.Background = (Brush)FindResource(pass ? "SuccessSoft" : "DangerSoft");
+            if (_run != null && Engine != null)
+            {
+                var run = _run;
+                Task.Run(() => Engine.RefreshTargets(run)).ContinueWith(t =>
                 {
-                    VulnId = r.VulnId, StigName = r.Stig, ExceptionGpo = v[0], Justification = v[1], PoamReference = v[2],
-                    DateAdded = DateTime.UtcNow, AddedBy = _session.User,
-                });
-            var run = _run;
-            RunOp("Saving exceptions register", () => { Engine.SaveRegister(register); return run == null ? null : Engine.EvaluateGate(run); }, g =>
-            {
-                LoadRegister();
-                if (g != null) ShowGate(g);
-            });
+                    if (!t.IsFaulted) RefreshGrid.ItemsSource = t.Result.Select(c => new RefreshRow { Computer = c }).ToList();
+                }, TaskScheduler.FromCurrentSynchronizationContext());
+            }
         }
 
-        // ================================================================ 6. promote
-
-        private void PromoteChecks_Click(object sender, RoutedEventArgs e)
+        private void PushPromote()
         {
-            if (!RequireRun()) return;
             var run = _run;
-            RunOp("Evaluating promotion pre-checks", () => Engine.EvaluatePromotionChecks(run), results =>
-            {
-                bool pass = results.All(r => r.Status != CheckStatus.Fail);
-                PromoteGateText.Text = string.Join(Environment.NewLine, results.Select(r => $"{r.Status.ToString().ToUpperInvariant()}: {r.Name} - {r.Detail}"));
-                if (results.Count == 0) PromoteGateText.Text = "No pre-checks configured.";
-                PromoteGateBorder.Background = new SolidColorBrush(pass ? Color.FromRgb(0xDF, 0xF5, 0xDF) : Color.FromRgb(0xFF, 0xC9, 0xC9));
-            });
-        }
-
-        private void PushPromote_Click(object sender, RoutedEventArgs e)
-        {
-            if (!RequireRun()) return;
-            var run = _run;
-            var items = Selected(PromoteGrid).Where(i => Engine.PromotableItems(run).Contains(i)).ToList();
-            if (items.Count == 0) { MessageBox.Show(this, "No piloted GPOs are selected.", Title); return; }
+            var items = Engine.PromotableItems(run);
+            if (items.Count == 0) { MessageBox.Show(this, "Nothing is ready to promote. Start the pilot first.", Title); return; }
             Push("Promote", () => Engine.PlanPromote(run, items), r => Engine.ExecutePromote(run, r.TypedWord, items, r.DcBackupConfirmed), () =>
             {
-                RunChanged?.Invoke();
-                if (MessageBox.Show(this, "Promote complete. Trigger a policy refresh on the affected computers now?\n\nSome settings still need a logoff or reboot.", Title, MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
-                    ListComputers(thenPush: true);
-            });
-        }
-
-        private void ListComputers_Click(object sender, RoutedEventArgs e) => ListComputers(false);
-
-        private void ListComputers(bool thenPush)
-        {
-            if (!RequireRun()) return;
-            var run = _run;
-            RunOp("Enumerating computers in production targets", () => Engine.RefreshTargets(run), list =>
-            {
-                RefreshGrid.ItemsSource = list.Select(c => new RefreshRow { Computer = c }).ToList();
-                AddLog(LogLevel.Info, $"{list.Count} computer(s) under the production targets.");
-                if (thenPush) PushRefresh_Click(null, null);
+                var refresh = MessageBox.Show(this, "Promote complete. Refresh policy on the affected computers now?\n\nSome settings still need a logoff or reboot.", Title, MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes;
+                ShowPromoteChecks(new List<CheckResult>());
+                if (refresh) Dispatcher.BeginInvoke(new Action(() => PushRefresh_Click(null, null)), System.Windows.Threading.DispatcherPriority.ApplicationIdle);
             });
         }
 
         private void PushRefresh_Click(object sender, RoutedEventArgs e)
         {
-            if (!RequireRun()) return;
-            var rows = (RefreshGrid.ItemsSource as List<RefreshRow>) ?? new List<RefreshRow>();
-            if (rows.Count == 0) { MessageBox.Show(this, "Click List computers first.", Title); return; }
-            var plan = new OperationPlan { Title = "Policy refresh (Invoke-GPUpdate -Force -RandomDelayInMinutes 0)" };
-            foreach (var r in rows) plan.Add("GPUpdate", r.Computer, "Force Group Policy refresh");
-            plan.Warnings.Add("Users on these computers may see a brief policy refresh. Settings such as user rights and services may need a logoff or reboot.");
-            var confirm = ConfirmWindow.Ask(this, plan);
-            if (!confirm.Confirmed) return;
+            if (_run == null || !RequireEngine()) return;
             var run = _run;
-            var byName = rows.ToDictionary(r => r.Computer, StringComparer.OrdinalIgnoreCase);
-            RunOp("Refreshing policy", () => Engine.ExecuteRefresh(run, rows.Select(r => r.Computer).ToList(), res =>
-                Dispatcher.BeginInvoke(new Action(() =>
+            RunOp("Listing computers", () => Engine.RefreshTargets(run), computers =>
+            {
+                var rows = computers.Select(c => new RefreshRow { Computer = c }).ToList();
+                RefreshGrid.ItemsSource = rows;
+                if (rows.Count == 0) { MessageBox.Show(this, "No computers were found under the production OUs.", Title); return; }
+                var plan = new OperationPlan { Title = "Refresh Group Policy (Invoke-GPUpdate -Force -RandomDelayInMinutes 0)" };
+                foreach (var r in rows) plan.Add("GPUpdate", r.Computer, "Force a policy refresh");
+                plan.Warnings.Add("Some settings (user rights, services) need a logoff or reboot to take effect.");
+                if (!ConfirmWindow.Ask(this, plan).Confirmed) return;
+                var byName = rows.ToDictionary(x => x.Computer, StringComparer.OrdinalIgnoreCase);
+                RunOp("Refreshing policy", () => Engine.ExecuteRefresh(run, computers, res => Dispatcher.BeginInvoke(new Action(() =>
                 {
                     if (byName.TryGetValue(res.Computer, out var row)) { row.Result = res.Success ? "OK" : "FAILED"; row.Message = res.Message; }
-                }))), results => AddLog(results.All(r => r.Success) ? LogLevel.Success : LogLevel.Warning,
-                    $"Refresh: {results.Count(r => r.Success)} OK, {results.Count(r => !r.Success)} failed."));
+                }))), results => AddLog(results.All(x => x.Success) ? LogLevel.Success : LogLevel.Warning, $"Policy refresh: {results.Count(x => x.Success)} OK, {results.Count(x => !x.Success)} failed."));
+            });
         }
 
-        // ================================================================ 7. rollback
+        private void UpdateRollback_Click(object sender, RoutedEventArgs e) { if (_run != null) Rollback(_run); }
 
-        private void PushRollbackSelected_Click(object sender, RoutedEventArgs e)
+        private void Rollback(RunState run)
         {
-            if (!RequireRun()) return;
-            var items = Selected(RollbackGrid);
-            if (items.Count == 0) { MessageBox.Show(this, "Tick the GPOs to roll back.", Title); return; }
-            Rollback(items);
+            var items = Engine.RollbackableItems(run);
+            if (items.Count == 0) { MessageBox.Show(this, "Nothing to roll back: this update has not been piloted or promoted.", Title); return; }
+            Push("Roll back " + Core.Timeline.QuarterTitle(run), () => Engine.PlanRollback(run, items), r => Engine.ExecuteRollback(run, items, r.DcBackupConfirmed), () =>
+            {
+                if (_run?.RunId == run.RunId) _run = Engine.Store.Load(run.RunId);
+            });
         }
 
-        private void PushRollbackAll_Click(object sender, RoutedEventArgs e)
+        // ================================================================ setup / config
+
+        private void Setup_Click(object sender, RoutedEventArgs e) => OpenSetup();
+
+        /// <summary>Opens the setup wizard (pre-filled from the current config, if any) and reloads on save.</summary>
+        public void OpenSetup()
         {
-            if (!RequireRun()) return;
-            Rollback(Engine.RollbackableItems(_run));
+            if (IsBusy) return;
+            var path = _session.IsDemo ? Path.Combine(Path.GetDirectoryName(_session.ConfigPath), "config.setup-demo.json") : _session.ConfigPath;
+            var wizard = new SetupWindow(this, path, _session.ConfigValid ? _session.Config : null, _session.IsDemo ? _session.Directory : null, _session.IsDemo);
+            if (wizard.ShowDialog() != true) return;
+            AddLog(LogLevel.Success, "Config saved: " + wizard.SavedPath);
+            if (_session.IsDemo) { MessageBox.Show(this, "Demo: config written to " + wizard.SavedPath + " (not used).", Title); return; }
+            _session.LoadConfig();
+            Connect();
+            if (_scan != null) BuildBackupRows();
         }
 
-        private void Rollback(List<RunItem> items)
+        private void OpenConfig_Click(object sender, RoutedEventArgs e)
         {
-            var run = _run;
-            Push("Rollback", () => Engine.PlanRollback(run, items), r => Engine.ExecuteRollback(run, items, r.DcBackupConfirmed), () => RunChanged?.Invoke());
+            if (File.Exists(_session.ConfigPath)) Process.Start("notepad.exe", "\"" + _session.ConfigPath + "\"");
+            else MessageBox.Show(this, "Config file not found: " + _session.ConfigPath + "\nRun the setup wizard.", Title);
         }
 
-        // ================================================================ 8. cleanup
+        private void OpenWorking_Click(object sender, RoutedEventArgs e) => Open(_session.Config?.WorkingFolder);
+
+        // ================================================================ cleanup
 
         private void FindCleanup_Click(object sender, RoutedEventArgs e)
         {
@@ -941,7 +927,7 @@ namespace StigGpoManager
             RunOp("Finding old versions", () => Engine.GetCleanupCandidates(), list =>
             {
                 CleanupGrid.ItemsSource = list.Select(c => new CleanupRow(c)).ToList();
-                AddLog(LogLevel.Info, $"{list.Count} cleanup candidate(s).");
+                AddLog(LogLevel.Info, list.Count == 0 ? "No old versions to clean up." : $"{list.Count} old version(s) can be cleaned up.");
             });
         }
 
@@ -960,11 +946,10 @@ namespace StigGpoManager
             if (_session.Config == null) return;
             try
             {
-                var reg = ExceptionsRegister.Load(_session.Config.ExceptionsRegisterPath);
-                _register = new ObservableCollection<ExceptionEntry>(reg.Entries);
+                _register = new ObservableCollection<ExceptionEntry>(ExceptionsRegister.Load(_session.Config.ExceptionsRegisterPath).Entries);
                 RegisterGrid.ItemsSource = _register;
             }
-            catch (Exception ex) { AddLog(LogLevel.Error, "Cannot read exceptions register: " + ex.Message); }
+            catch (Exception ex) { AddLog(LogLevel.Error, "Cannot read the exceptions register: " + ex.Message); }
         }
 
         private void RegisterAdd_Click(object sender, RoutedEventArgs e)
@@ -979,7 +964,7 @@ namespace StigGpoManager
         {
             var rows = RegisterGrid.SelectedItems.OfType<ExceptionEntry>().ToList();
             if (rows.Count == 0) return;
-            if (MessageBox.Show(this, $"Delete {rows.Count} register entr{(rows.Count == 1 ? "y" : "ies")}? (Takes effect when you click Save.)", Title, MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
+            if (MessageBox.Show(this, $"Delete {rows.Count} entr{(rows.Count == 1 ? "y" : "ies")}? (Takes effect when you click Save.)", Title, MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
             foreach (var r in rows) _register.Remove(r);
         }
 
@@ -991,11 +976,11 @@ namespace StigGpoManager
             RegisterGrid.CommitEdit(DataGridEditingUnit.Row, true);
             var reg = new ExceptionsRegister { Entries = _register.ToList() };
             var problems = reg.Validate();
-            if (problems.Count > 0) { MessageBox.Show(this, string.Join("\n", problems), "Register not saved", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
-            RunOp("Saving exceptions register", () => Engine.SaveRegister(reg), () => AddLog(LogLevel.Success, $"Register saved ({reg.Entries.Count} entries)."));
+            if (problems.Count > 0) { MessageBox.Show(this, string.Join("\n", problems), "Not saved", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+            RunOp("Saving exceptions register", () => Engine.SaveRegister(reg), () => AddLog(LogLevel.Success, $"Exceptions register saved ({reg.Entries.Count} entries)."));
         }
 
-        // ================================================================ audit / log
+        // ================================================================ audit
 
         private void AuditRefresh_Click(object sender, RoutedEventArgs e) => LoadAudit();
 
@@ -1003,8 +988,7 @@ namespace StigGpoManager
         {
             if (_session.Config == null) return;
             var runId = AuditCurrentRun.IsChecked == true ? _run?.RunId : null;
-            var entries = new AuditLog(_session.Config.AuditLogPath, _session.User).ReadAll(runId);
-            AuditGrid.ItemsSource = entries.AsEnumerable().Reverse().Take(5000).Select(o => new AuditRow
+            AuditGrid.ItemsSource = new AuditLog(_session.Config.AuditLogPath, _session.User).ReadAll(runId).AsEnumerable().Reverse().Take(5000).Select(o => new AuditRow
             {
                 Time = Json.GetString(o, "timestamp"), User = Json.GetString(o, "user"), Run = Json.GetString(o, "runId"),
                 Action = Json.GetString(o, "action"), Target = Json.GetString(o, "target"), Result = Json.GetString(o, "result"),
@@ -1012,82 +996,38 @@ namespace StigGpoManager
             }).ToList();
         }
 
-        private void ClearLog_Click(object sender, RoutedEventArgs e) => _log.Clear();
-
-        // ================================================================ run views
-
-        private void RefreshRunViews()
-        {
-            UpdateHeader();
-            RefreshSteps();
-            if (_run == null)
-            {
-                RunItemsGrid.ItemsSource = null; PilotGrid.ItemsSource = null; PromoteGrid.ItemsSource = null;
-                RollbackGrid.ItemsSource = null; ScansGrid.ItemsSource = null; ImportGrid.ItemsSource = null;
-                return;
-            }
-            ImportGrid.ItemsSource = _backupRows.Where(r => !r.Skip).Select(r => new
-            {
-                r.ProposedName, r.DisplayName, r.Version, r.Scope, Mapping = r.Mapping?.NameTemplate,
-            }).ToList();
-            var imported = _run.Items.Where(i => i.NewGpoId != null || i.Status == ItemStatus.Failed).ToList();
-            RunItemsGrid.ItemsSource = imported.Select(i => new ItemRow(i, false)).ToList();
-
-            if (Engine != null)
-            {
-                var pilotable = Engine.PilotableItems(_run);
-                PilotGrid.ItemsSource = imported.Select(i => new ItemRow(i, pilotable.Contains(i))).ToList();
-                var promotable = Engine.PromotableItems(_run);
-                PromoteGrid.ItemsSource = imported.Select(i => new ItemRow(i, promotable.Contains(i))).ToList();
-                var rollbackable = Engine.RollbackableItems(_run);
-                RollbackGrid.ItemsSource = rollbackable.Select(i => new ItemRow(i, false,
-                    string.Join("; ", _run.LinkActions.Where(a => a.ForItem != null && LinkOrdering.SameGpo(a.ForItem, i.NewGpoId) && a.Target != null && !a.Target.StartsWith("("))
-                                                      .Select(a => a.Target).Distinct(StringComparer.OrdinalIgnoreCase)))).ToList();
-            }
-            ScansGrid.ItemsSource = _run.ScanImports.Select(s => new ScanRow { Record = s }).ToList();
-            if (_run.Gate != null && _gate == null)
-            {
-                PromoteGateText.Text = $"Last gate evaluation {_run.Gate.EvaluatedUtc.ToLocalTime():yyyy-MM-dd HH:mm}: {(_run.Gate.Passed ? "PASS" : "FAIL")} - {_run.Gate.Summary}";
-                GateText.Text = PromoteGateText.Text;
-            }
-        }
-    
         // ================================================================ screenshot tour (/screenshots)
 
-        /// <summary>
-        /// Walks every step of the demo run and saves a PNG of each screen (used by CI to produce the
-        /// README screenshots). Returns the process exit code.
-        /// </summary>
+        /// <summary>Walks the demo and saves a PNG of each screen (used by CI for the README). Returns the exit code.</summary>
         public async Task<int> RunScreenshotTour(string folder)
         {
             try
             {
                 Directory.CreateDirectory(folder);
-                Width = 1400; Height = 880;
                 foreach (var g in FindChildren<DataGrid>(this)) { g.EnableRowVirtualization = false; g.EnableColumnVirtualization = false; }
-                await WaitIdle(requireRun: true);
-                ShowCommands.IsChecked = false;
+                await WaitIdle(() => _lastPreflight != null);
+                ShowView(HomeView);
+                await Shot(folder, "01-home");
 
-                await Shot(folder, "01-start-preflight", "PanelStart");
-                await Shot(folder, "02-load-package", "PanelLoad");
-                CompareStore_Click(null, null); await WaitIdle();
-                StoreHideUnchanged.IsChecked = false;
-                await Shot(folder, "03-central-store", "PanelStore");
-                await Shot(folder, "04-import", "PanelImport");
-                Review_Click(null, null); await WaitIdle();
-                await Shot(folder, "05-review-diff", "PanelReview");
-                await Shot(folder, "06-pilot", "PanelPilot");
-                EvaluateGate_Click(null, null); await WaitIdle();
-                await Shot(folder, "07-scan-gate", "PanelScans");
-                PromoteChecks_Click(null, null); await WaitIdle();
-                ListComputers(false); await WaitIdle();
-                await Shot(folder, "08-promote", "PanelPromote");
+                var active = ActiveRun(LoadRuns());
+                OpenRun(active.RunId);
+                await WaitIdle(() => _run != null && UpdateView.Visibility == Visibility.Visible);
+                EnterStage(Stage.Prepare); await WaitIdle();
+                await Shot(folder, "02-prepare");
+                EnterStage(Stage.Review); await WaitIdle(() => _review != null);
+                await Shot(folder, "03-review");
+                EnterStage(Stage.Pilot); await WaitIdle();
+                ShowFindings(await Task.Run(() => Engine.EvaluateGate(_run)));
+                await Shot(folder, "04-pilot");
+                EnterStage(Stage.Promote); await WaitIdle();
+                await Task.Delay(500);
+                await Shot(folder, "05-promote");
 
                 var plan = await Task.Run(() => Engine.PlanPromote(_run));
                 var dlg = new ConfirmWindow(this, plan) { Width = 1000, Height = 720, WindowStartupLocation = WindowStartupLocation.Manual, Left = Left + 60, Top = Top + 40 };
                 dlg.Show();
                 await Settle();
-                Save(dlg, Path.Combine(folder, "09-confirm-dialog.png"));
+                Save(dlg, Path.Combine(folder, "06-confirm.png"));
                 dlg.Close();
 
                 var wizard = new SetupWindow(this, Path.Combine(Path.GetTempPath(), "StigGpoManager-demo", "config.setup-demo.json"), null, _session.Directory, demo: true)
@@ -1099,16 +1039,16 @@ namespace StigGpoManager
                 {
                     wizard.Pages.SelectedIndex = page;
                     await Settle();
-                    Save(wizard, Path.Combine(folder, $"{14 + page:00}-setup-{page + 1}.png"));
+                    Save(wizard, Path.Combine(folder, $"{7 + page:00}-setup-{page + 1}.png"));
                 }
                 wizard.Close();
 
-                await Shot(folder, "10-rollback", "PanelRollback");
-                FindCleanup_Click(null, null); await WaitIdle();
+                ShowView(RegisterView); await Shot(folder, "11-exceptions");
+                ShowView(AuditView); await Shot(folder, "12-audit-log");
+                ShowView(HealthView); await Shot(folder, "13-health");
+                ShowView(CleanupView); FindCleanup_Click(null, null); await WaitIdle();
                 if (CleanupGrid.ItemsSource is List<CleanupRow> rows && rows.Count > 0) rows[0].Selected = true;
-                await Shot(folder, "11-cleanup", "PanelCleanup");
-                await Shot(folder, "12-exceptions-register", "PanelRegister");
-                await Shot(folder, "13-audit-log", "PanelAudit");
+                await Shot(folder, "14-cleanup");
                 return 0;
             }
             catch (Exception ex)
@@ -1127,14 +1067,14 @@ namespace StigGpoManager
             }
         }
 
-        private async Task WaitIdle(bool requireRun = false)
+        private async Task WaitIdle(Func<bool> condition = null)
         {
             var deadline = DateTime.UtcNow.AddSeconds(90);
             int idle = 0;
             while (DateTime.UtcNow < deadline && idle < 3)
             {
                 await Task.Delay(200);
-                idle = !IsBusy && (!requireRun || _run != null) ? idle + 1 : 0;
+                idle = !IsBusy && (condition == null || condition()) ? idle + 1 : 0;
             }
             await Settle();
         }
@@ -1146,20 +1086,17 @@ namespace StigGpoManager
             await Dispatcher.InvokeAsync(() => { }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
         }
 
-        private async Task Shot(string folder, string name, string panel)
+        private async Task Shot(string folder, string name)
         {
-            GoTo(panel);
             await Settle();
             Save(this, Path.Combine(folder, name + ".png"));
         }
 
-        /// <summary>Renders a window's client area (with an opaque background) to PNG.</summary>
+        /// <summary>Renders a window at a fixed size (independent of the build machine's screen) to PNG.</summary>
         private static void Save(Window window, string path)
         {
             window.UpdateLayout();
             var root = (FrameworkElement)window.Content;
-            // Lay the content out at a fixed size (independent of the build machine's small screen) and
-            // render that layout directly, so nothing is stretched.
             bool main = window is MainWindow;
             int w = main ? 1440 : (int)Math.Ceiling(root.ActualWidth), h = main ? 920 : (int)Math.Ceiling(root.ActualHeight);
             if (main) { root.Measure(new Size(w, h)); root.Arrange(new Rect(0, 0, w, h)); }

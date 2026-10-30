@@ -56,6 +56,7 @@ namespace StigGpoManager
             e.ExecuteImport(run, candidates);
             e.Review(run);
             e.ExecutePilot(run);
+            run.CreatedUtc = DateTime.UtcNow.AddDays(-12);
             run.PilotStartedUtc = DateTime.UtcNow.AddDays(-9).AddHours(-2);
 
             var register = new ExceptionsRegister();
@@ -92,7 +93,42 @@ namespace StigGpoManager
             e.ImportScanResult(run, pilot2, StigEngine.StagePilot);
             e.EvaluateGate(run);
             e.Store.Save(run);
+            SavePastRuns(e.Store);
             return session;
+        }
+
+        /// <summary>"October_2026" for the current DISA release (quartersBack = 0), the one before, etc.</summary>
+        private static string ReleaseName(int quartersBack)
+        {
+            var d = Core.Timeline.ReleaseAtOrBefore(DateTime.Now).AddMonths(-3 * quartersBack);
+            return System.Globalization.CultureInfo.InvariantCulture.DateTimeFormat.GetMonthName(d.Month) + "_" + d.Year;
+        }
+
+        /// <summary>Two earlier quarterly updates (promoted, then replaced) so the calendar shows history.</summary>
+        private static void SavePastRuns(RunStore store)
+        {
+            var now = DateTime.UtcNow;
+            for (int q = 1; q <= 2; q++)
+            {
+                var release = Core.Timeline.ReleaseAtOrBefore(DateTime.Now).AddMonths(-3 * q);
+                var created = release.AddDays(18).ToUniversalTime();
+                var r = new RunState
+                {
+                    RunId = created.ToString("yyyyMMdd") + "-090000-demo" + q, CreatedUtc = created, CreatedBy = "LAB\\admin", Domain = Domain,
+                    Package = new PackageRecord { Name = "U_STIG_GPO_Package_" + ReleaseName(q) + ".zip", Sha256 = new string('0', 64) },
+                    PilotStartedUtc = created.AddDays(3), PromotedUtc = created.AddDays(3 + 15),
+                };
+                foreach (var (name, ver) in new[] { ("DoD WinSvr2025 MS STIG Comp", q == 1 ? "v1r3" : "v1r2"), ("DoD Win11 STIG User", q == 1 ? "v2r8" : "v2r7") })
+                    r.Items.Add(new RunItem { NewGpoName = name + " " + ver, NewGpoId = "{" + Guid.NewGuid().ToString().ToUpperInvariant() + "}", Version = ver, Status = ItemStatus.Promoted, PilotMode = PilotMode.OU });
+                r.History.Add(new PhaseEvent { Phase = "PackageLoaded", Utc = created, User = r.CreatedBy });
+                r.History.Add(new PhaseEvent { Phase = "Imported", Utc = created.AddHours(1), User = r.CreatedBy });
+                r.History.Add(new PhaseEvent { Phase = "Reviewed", Utc = created.AddHours(2), User = r.CreatedBy });
+                r.History.Add(new PhaseEvent { Phase = "Piloted", Utc = r.PilotStartedUtc.Value, User = r.CreatedBy });
+                r.History.Add(new PhaseEvent { Phase = "Promoted", Utc = r.PromotedUtc.Value, User = r.CreatedBy });
+                r.Phase = RunPhase.Promoted;
+                if (q == 2) { r.History.Add(new PhaseEvent { Phase = "Closed", Utc = r.PromotedUtc.Value.AddDays(80), User = r.CreatedBy }); r.Phase = RunPhase.Closed; }
+                store.Save(r);
+            }
         }
 
         private static string Config(string work, string store) => $@"{{
@@ -185,7 +221,7 @@ namespace StigGpoManager
 
         private static string BuildPackage(string root)
         {
-            var src = Path.Combine(root, "pkgsrc", "October 2026 DISA STIG GPO Package");
+            var src = Path.Combine(root, "pkgsrc", ReleaseName(0).Replace("_", " ") + " DISA STIG GPO Package");
             Backup(Path.Combine(src, "DoD WinSvr 2025 MS and DC v1r4", "GPOs"), "DoD WinSvr 2025 Member Server STIG Computer v1r4", MemberServer(true));
             Backup(Path.Combine(src, "DoD WinSvr 2025 MS and DC v1r4", "GPOs"), "DoD WinSvr 2025 Domain Controller STIG Computer v1r4", R.Report("dc", R.Account("MinimumPasswordLength", 15)));
             Backup(Path.Combine(src, "DoD Windows 11 v2r9", "GPOs"), "DoD Windows 11 STIG User v2r9",
@@ -204,7 +240,7 @@ namespace StigGpoManager
             WriteFile(Path.Combine(chrome, "en-US", "chrome.adml"), "<policyDefinitionResources rev='2026-09'/>", new DateTime(2026, 9, 1));
             WriteFile(Path.Combine(src, "DoD Microsoft Edge v2r3", "ADMX", "msedge.admx"), "<policyDefinitions/>", new DateTime(2026, 9, 1));
 
-            var zip = Path.Combine(root, "U_STIG_GPO_Package_October_2026.zip");
+            var zip = Path.Combine(root, "U_STIG_GPO_Package_" + ReleaseName(0) + ".zip");
             ZipFile.CreateFromDirectory(Path.Combine(root, "pkgsrc"), zip);
             return zip;
         }
