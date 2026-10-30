@@ -13,10 +13,43 @@ downloads, and no third-party DLLs. It uses only what ships with Windows Server 
 > **Test against a lab domain before any real use.** The same exe works in the lab and in production;
 > only `config.json` differs.
 
+## Screenshots
+
+Taken automatically on a Windows build machine by `StigGpoManager.exe /screenshots` (demo mode,
+simulated domain `lab.example.mil`).
+
+**Review / diff**: setting-level changes, exception findings, and the red replacement-type warning
+![Review / diff](docs/screenshots/05-review-diff.png)
+
+**Scan results gate**: an open finding that is not in the exceptions register blocks Promote
+![Scan results gate](docs/screenshots/07-scan-gate.png)
+
+**Every Push shows the exact changes first**: here Promote is blocked by the gate, with the before/after link order for each OU
+![Confirmation dialog](docs/screenshots/09-confirm-dialog.png)
+
+**Setup wizard**: mappings detected from current links, previewed against the DISA package
+![Setup wizard - mappings](docs/screenshots/16-setup-3.png)
+
+<details>
+<summary>All screens</summary>
+
+| | |
+|---|---|
+| ![](docs/screenshots/01-start-preflight.png) Start / pre-flight and runs | ![](docs/screenshots/02-load-package.png) 1. Load package |
+| ![](docs/screenshots/03-central-store.png) 2. Central Store | ![](docs/screenshots/04-import.png) 3. Import |
+| ![](docs/screenshots/06-pilot.png) 5. Pilot | ![](docs/screenshots/08-promote.png) 6. Promote and policy refresh |
+| ![](docs/screenshots/10-rollback.png) 7. Rollback | ![](docs/screenshots/11-cleanup.png) 8. Cleanup |
+| ![](docs/screenshots/12-exceptions-register.png) Exceptions register | ![](docs/screenshots/13-audit-log.png) Audit log |
+| ![](docs/screenshots/14-setup-1.png) Setup: domain | ![](docs/screenshots/15-setup-2.png) Setup: naming and folders |
+| ![](docs/screenshots/17-setup-4.png) Setup: review and save | |
+
+</details>
+
 ---
 
 ## Contents
 
+- [Screenshots](#screenshots)
 - [Requirements](#requirements)
 - [Install](#install)
 - [Configure (`config.json`)](#configure-configjson)
