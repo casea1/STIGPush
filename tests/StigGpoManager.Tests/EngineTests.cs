@@ -355,5 +355,16 @@ namespace StigGpoManager.Tests
             Assert.Equal("OU=Servers,OU=Admin,DC=corp,DC=example,DC=com", AppConfig.SomToDn("corp.example.com/Admin/Servers"));
             Assert.Equal("DC=corp,DC=example,DC=com", AppConfig.SomToDn("corp.example.com"));
         }
+
+        [Fact]
+        public void PilotInheritanceWarnsOnlyWhenTheExceptionSetsSomethingTheNewGpoSets()
+        {
+            var banner = _ad.AddGpo("SITE - Logon Banner", TestData.Report("SITE - Logon Banner", TestData.SecOption("MACHINE\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\LegalNoticeText", 1, "Interactive logon: Message text")));
+            _ad.Link(TestData.ProdOu, banner);
+            var run = ImportMemberServer();
+            var warnings = _engine.PilotInheritanceWarnings(run.Items.Single());
+            Assert.DoesNotContain(warnings, w => w.Contains("SITE - Logon Banner"));           // nothing in common with the new GPO
+            Assert.Contains(warnings, w => w.Contains(Ex) && w.Contains("SeDenyNetworkLogonRight")); // the server exception overlaps, and says where
+        }
     }
 }

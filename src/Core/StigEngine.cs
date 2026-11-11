@@ -511,6 +511,20 @@ namespace StigGpoManager.Core
         /// precedence than a GPO linked directly on the pilot OU, so during pilot the new DISA GPO
         /// would beat them.
         /// </summary>
+        /// <summary>Display names of settings both GPOs define; null when either report cannot be read (then warn anyway).</summary>
+        private List<string> SharedSettings(string gpoA, string gpoB)
+        {
+            try
+            {
+                string Base(string k) { var i = k.IndexOf('#'); return i < 0 ? k : k.Substring(0, i); }
+                var a = GpoSettingsParser.Parse(Directory.GetGpoReportXml(gpoA));
+                var keys = new HashSet<string>(a.Select(x => Base(x.Key)), StringComparer.OrdinalIgnoreCase);
+                return GpoSettingsParser.Parse(Directory.GetGpoReportXml(gpoB)).Where(x => keys.Contains(Base(x.Key)))
+                                        .Select(x => x.DisplayName).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            }
+            catch { return null; }
+        }
+
         public List<string> PilotInheritanceWarnings(RunItem item)
         {
             var warnings = new List<string>();
@@ -525,9 +539,16 @@ namespace StigGpoManager.Core
                     List<LinkInfo> links;
                     try { links = Directory.GetLinks(parent); } catch { continue; }
                     foreach (var l in links.Where(l => l.Enabled && Config.IsExceptionGpo(l.GpoName) && !direct.Contains(LinkOrdering.NormalizeGuid(l.GpoId))))
+                    {
+                        // Precedence only matters where both GPOs set the same thing: an exception that sets nothing the
+                        // new GPO sets (logon banner vs Edge) applies on the pilot OU exactly as before.
+                        var shared = SharedSettings(item.NewGpoId, l.GpoId);
+                        if (shared != null && shared.Count == 0) continue;
+                        var what = shared == null ? "" : $" Both set: {string.Join("; ", shared.Take(3))}{(shared.Count > 3 ? $" (+{shared.Count - 3} more)" : "")}.";
                         warnings.Add($"Exception GPO '{l.GpoName}' is linked on parent {parent} but not on pilot OU {pilot}. " +
-                                     $"During pilot, '{item.NewGpoName}' (linked directly on the pilot OU) takes precedence over it on pilot machines. " +
+                                     $"During pilot, '{item.NewGpoName}' (linked directly on the pilot OU) takes precedence over it on pilot machines for the settings both define.{what} " +
                                      "Link the exception GPO to the pilot OU too, or use group-based pilot for this mapping.");
+                    }
                 }
             }
             return warnings;
