@@ -669,10 +669,17 @@ namespace StigGpoManager
         private void BuildBackupRows()
         {
             if (_scan == null || _session.Config == null) { BackupsGrid.ItemsSource = null; return; }
+            // GPOs that already exist in AD (e.g. imported by an earlier update from the same package) are skipped up
+            // front, so a second update from one package imports only what is new (a mapping added later).
+            var inAd = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            try { if (_session.Directory != null) foreach (var g in _session.Directory.GetAllGpos()) inAd.Add(g.DisplayName); } catch { /* import plan re-checks */ }
             _backupRows = MappingResolver.Resolve(_scan.Backups, _session.Config).Select(c =>
             {
                 var done = _run?.Items.FirstOrDefault(i => i.BackupId == c.Backup.BackupId && i.NewGpoId != null);
-                return new BackupRow(c, done != null ? $"Imported as '{done.NewGpoName}'" : null);
+                if (done != null) return new BackupRow(c, $"Imported as '{done.NewGpoName}'");
+                if (!c.Skip && c.ProposedName != null && inAd.Contains(c.ProposedName))
+                    return new BackupRow(c, $"Already in AD as '{c.ProposedName}' (imported earlier); skipped.");
+                return new BackupRow(c);
             }).ToList();
             foreach (var r in _backupRows) r.PropertyChanged += (s, e) => RefreshUpdate();
             BackupsGrid.ItemsSource = _backupRows;
