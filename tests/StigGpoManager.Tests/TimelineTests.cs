@@ -98,5 +98,27 @@ namespace StigGpoManager.Tests
             Assert.Equal(new DateTime(2026, 11, 4), old.End);
             Assert.StartsWith("Replaced by October 2026", old.Label);
         }
+
+        [Fact]
+        public void AbandonedAndHiddenUpdatesAreLeftOffTheCalendar()
+        {
+            var now = new DateTime(2026, 11, 11, 12, 0, 0, DateTimeKind.Local);
+            RunState Run(RunPhase phase, int gpos, bool hidden = false, bool promoted = false)
+            {
+                var r = new RunState { RunId = Guid.NewGuid().ToString("N"), CreatedUtc = now.AddDays(-3).ToUniversalTime(), Phase = phase, Hidden = hidden,
+                                       Package = new PackageRecord { Name = "U_STIG_GPO_Package_October_2026.zip" } };
+                for (int i = 0; i < gpos; i++) r.Items.Add(new RunItem { NewGpoId = "{" + Guid.NewGuid() + "}", Status = ItemStatus.Imported });
+                if (promoted) r.PromotedUtc = now.AddDays(-1).ToUniversalTime();
+                return r;
+            }
+            var real = Run(RunPhase.Promoted, 8, promoted: true);
+            var abandoned = Run(RunPhase.Closed, 0);
+            var hiddenTest = Run(RunPhase.Closed, 1, hidden: true);
+            var closedWithGpo = Run(RunPhase.Closed, 1);
+            var tl = Timeline.Build(new[] { real, abandoned, hiddenTest, closedWithGpo }, 14, now);
+            Assert.Equal(new[] { closedWithGpo.RunId, real.RunId }.OrderBy(x => x), tl.Rows.Select(r => r.RunId).OrderBy(x => x));
+            Assert.False(Timeline.IsListed(abandoned));
+            Assert.False(Timeline.IsListed(hiddenTest));
+        }
     }
 }

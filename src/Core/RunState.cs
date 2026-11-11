@@ -158,6 +158,8 @@ namespace StigGpoManager.Core
         public List<string> Backups { get; set; } = new List<string>();
         public List<string> Reports { get; set; } = new List<string>();
         public List<ScanImportRecord> ScanImports { get; set; } = new List<ScanImportRecord>();
+        /// <summary>Hidden from the calendar and History list (a test or abandoned update). Kept on disk with its audit trail.</summary>
+        public bool Hidden { get; set; }
         public GateRecord Gate { get; set; }
         public string Notes { get; set; }
 

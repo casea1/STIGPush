@@ -305,10 +305,14 @@ namespace StigGpoManager
             var tl = Core.Timeline.Build(runs, soak, DateTime.Now);
             Calendar.Timeline = tl;
             NextReleaseText.Text = $"Next DISA release expected: {tl.NextExpectedRelease:MMMM yyyy}";
-            HistoryGrid.ItemsSource = runs.Select(r => new HistoryRow
+            bool showHidden = ShowHiddenCheck.IsChecked == true;
+            var hiddenCount = runs.Count(r => !Core.Timeline.IsListed(r));
+            ShowHiddenCheck.Content = hiddenCount == 0 ? "Show hidden" : $"Show hidden ({hiddenCount})";
+            HistoryGrid.ItemsSource = runs.Where(r => showHidden || Core.Timeline.IsListed(r)).Select(r => new HistoryRow
             {
                 State = r, Release = Core.Timeline.QuarterTitle(r).Replace(" release", ""),
-                Status = r.StatusText(soak, DateTime.UtcNow), Items = r.Items.Count(i => i.NewGpoId != null),
+                Status = r.StatusText(soak, DateTime.UtcNow) + (Core.Timeline.IsListed(r) ? "" : r.Hidden ? " (hidden)" : " (nothing imported; hidden)"),
+                Items = r.Items.Count(i => i.NewGpoId != null),
                 Created = r.CreatedUtc.ToLocalTime().ToString("yyyy-MM-dd"),
             }).ToList();
 
@@ -416,6 +420,30 @@ namespace StigGpoManager
             if (r == null || !RequireEngine()) return;
             if (MessageBox.Show(this, $"Mark the {r.Release} update as finished? It stays on disk for audit and reports.", Title, MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
             RunOp("Closing update", () => Engine.CloseRun(Engine.Store.Load(r.State.RunId)));
+        }
+
+        private void ShowHidden_Changed(object sender, RoutedEventArgs e) => RefreshHome();
+
+        private void HistoryGrid_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+            HideButton.Content = HistoryGrid.SelectedItem is HistoryRow r && r.State.Hidden ? "Show again" : "Hide";
+
+        private void HistoryHide_Click(object sender, RoutedEventArgs e)
+        {
+            var r = SelectedHistory();
+            if (r == null || !RequireEngine()) return;
+            var run = Engine.Store.Load(r.State.RunId);
+            if (run.Hidden)
+            {
+                RunOp("Showing update", () => Engine.SetRunHidden(run, false));
+                return;
+            }
+            if (run.Phase != RunPhase.Closed && run.Phase != RunPhase.RolledBack)
+            {
+                MessageBox.Show(this, "Only a closed or rolled-back update can be hidden. Close it first (it stays on disk for audit).", Title);
+                return;
+            }
+            if (MessageBox.Show(this, $"Hide the {r.Release} update ({r.Status}) from the calendar and History?\n\nNothing in AD changes and nothing is deleted: the update, its reports and audit entries stay on disk. Tick 'Show hidden' to see it again.", Title, MessageBoxButton.YesNo) != MessageBoxResult.Yes) return;
+            RunOp("Hiding update", () => Engine.SetRunHidden(run, true));
         }
 
         // ================================================================ update view

@@ -627,6 +627,16 @@ namespace StigGpoManager.Core
         }
 
         /// <summary>Marks a run as closed (it no longer shows as active in the tray).</summary>
+        /// <summary>Hides (or shows again) a finished update on the calendar and History list. Nothing is deleted.</summary>
+        public void SetRunHidden(RunState run, bool hidden)
+        {
+            if (hidden && run.Phase != RunPhase.Closed && run.Phase != RunPhase.RolledBack)
+                throw new InvalidOperationException("Only a closed or rolled-back update can be hidden. Close it first.");
+            run.Hidden = hidden;
+            Save(run);
+            Audit.Write(run.RunId, hidden ? "HideRun" : "UnhideRun", run.RunId, "Success", null, "Run file, reports and audit entries are kept.");
+        }
+
         public void CloseRun(RunState run, string note = null)
         {
             run.SetPhase(RunPhase.Closed, User, note);

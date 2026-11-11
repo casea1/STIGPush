@@ -76,6 +76,14 @@ namespace StigGpoManager.Core
             return Stage.Prepare;
         }
 
+        /// <summary>
+        /// Whether a run appears on the calendar and in History: not hidden, and not a closed update that never
+        /// created a GPO (a package loaded and abandoned). Those stay on disk for the audit trail.
+        /// </summary>
+        public static bool IsListed(RunState run) =>
+            run != null && !run.Hidden &&
+            !(run.Phase == RunPhase.Closed && !run.PromotedUtc.HasValue && !run.Items.Any(i => i.NewGpoId != null));
+
         /// <summary>"October 2026" from the package name if it names a month and year, else from the run date.</summary>
         public static string QuarterTitle(RunState run)
         {
@@ -124,7 +132,7 @@ namespace StigGpoManager.Core
                 From = new DateTime(today.Year, today.Month, 1).AddMonths(-monthsBack),
                 To = new DateTime(today.Year, today.Month, 1).AddMonths(monthsForward + 1).AddDays(-1),
             };
-            var list = runs.OrderBy(r => r.CreatedUtc).ToList();
+            var list = runs.Where(IsListed).OrderBy(r => r.CreatedUtc).ToList();
             var promotedRuns = list.Where(r => r.PromotedUtc.HasValue).OrderBy(r => r.PromotedUtc).ToList();
 
             var latestRelease = list.Count == 0 ? ReleaseAtOrBefore(today) : list.Max(ReleaseDateOf);

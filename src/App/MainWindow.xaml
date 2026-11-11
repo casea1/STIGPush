@@ -144,9 +144,11 @@
                                     <Button Content="Report" Click="HistoryReport_Click" Margin="0,0,6,4"/>
                                     <Button Content="Roll back..." Click="HistoryRollback_Click" Margin="0,0,6,4"/>
                                     <Button Content="Close" Click="HistoryClose_Click" Margin="0,0,6,4" ToolTip="Mark the update finished (kept for audit)"/>
+                                    <Button x:Name="HideButton" Content="Hide" Click="HistoryHide_Click" Margin="0,0,6,4" ToolTip="Remove a closed test or abandoned update from the calendar and this list. Nothing is deleted; it stays in the audit log."/>
+                                    <CheckBox x:Name="ShowHiddenCheck" Content="Show hidden" VerticalAlignment="Center" Margin="4,0,10,4" Checked="ShowHidden_Changed" Unchecked="ShowHidden_Changed"/>
                                     <Button x:Name="CleanupButton" Content="Clean up old versions..." Click="NavCleanup_Click" Margin="0,0,0,4"/>
                                 </WrapPanel>
-                                <DataGrid x:Name="HistoryGrid" IsReadOnly="True" SelectionMode="Single" MouseDoubleClick="HistoryOpen_Click" MinHeight="100">
+                                <DataGrid x:Name="HistoryGrid" IsReadOnly="True" SelectionMode="Single" MouseDoubleClick="HistoryOpen_Click" SelectionChanged="HistoryGrid_SelectionChanged" MinHeight="100">
                                     <DataGrid.Columns>
                                         <DataGridTextColumn Header="Release" Binding="{Binding Release}" Width="125"/>
                                         <DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="*"/>
