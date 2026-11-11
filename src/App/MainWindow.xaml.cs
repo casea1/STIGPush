@@ -23,6 +23,8 @@ namespace StigGpoManager
         private RunState _run;
         private PackageScanResult _scan;
         private List<BackupRow> _backupRows = new List<BackupRow>();
+        /// <summary>GPO names in AD, read in the background when a package is loaded or an update opened (null = not read).</summary>
+        private List<string> _gposInAd;
         private List<CentralStoreItem> _storeItems = new List<CentralStoreItem>();
         private ReviewResult _review;
         private List<CheckResult> _lastPreflight;
@@ -429,7 +431,7 @@ namespace StigGpoManager
                 try
                 {
                     scan = Engine.RescanPackage(run);
-                    if (Core.Timeline.StageOf(run) == Stage.Prepare) store = Engine.CompareCentralStore(scan);
+                    if (Core.Timeline.StageOf(run) == Stage.Prepare) { store = Engine.CompareCentralStore(scan); ReadGposInAd(); }
                 }
                 catch (Exception ex) { AddLog(LogLevel.Warning, ex.Message); }
                 return Tuple.Create(run, scan, store);
@@ -653,6 +655,7 @@ namespace StigGpoManager
             RunOp("Reading the package", () =>
             {
                 var run = Engine.CreateRun(zip, expected, out var scan);
+                ReadGposInAd();
                 return Tuple.Create(run, scan, Engine.CompareCentralStore(scan));
             }, t =>
             {
@@ -669,20 +672,36 @@ namespace StigGpoManager
         private void BuildBackupRows()
         {
             if (_scan == null || _session.Config == null) { BackupsGrid.ItemsSource = null; return; }
-            // GPOs that already exist in AD (e.g. imported by an earlier update from the same package) are skipped up
-            // front, so a second update from one package imports only what is new (a mapping added later).
-            var inAd = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            try { if (_session.Directory != null) foreach (var g in _session.Directory.GetAllGpos()) inAd.Add(g.DisplayName); } catch { /* import plan re-checks */ }
-            _backupRows = MappingResolver.Resolve(_scan.Backups, _session.Config).Select(c =>
+            var candidates = MappingResolver.Resolve(_scan.Backups, _session.Config);
+            // GPOs that already exist in AD (imported by an earlier update from the same package) are skipped up front,
+            // so a second update from one package imports only what is new (e.g. a mapping added later).
+            var skipped = MappingResolver.SkipAlreadyInAd(candidates.Where(c => _run?.Items.Any(i => i.BackupId == c.Backup.BackupId && i.NewGpoId != null) != true), _gposInAd);
+            if (skipped > 0) AddLog(LogLevel.Info, $"{skipped} GPO(s) in this package already exist in AD (imported earlier) and are skipped.");
+            _backupRows = candidates.Select(c =>
             {
                 var done = _run?.Items.FirstOrDefault(i => i.BackupId == c.Backup.BackupId && i.NewGpoId != null);
                 if (done != null) return new BackupRow(c, $"Imported as '{done.NewGpoName}'");
-                if (!c.Skip && c.ProposedName != null && inAd.Contains(c.ProposedName))
-                    return new BackupRow(c, $"Already in AD as '{c.ProposedName}' (imported earlier); skipped.");
+                if (c.AlreadyInAd) return new BackupRow(c, c.Problem);
                 return new BackupRow(c);
             }).ToList();
             foreach (var r in _backupRows) r.PropertyChanged += (s, e) => RefreshUpdate();
             BackupsGrid.ItemsSource = _backupRows;
+        }
+
+        /// <summary>Runs on the background thread of the operation; logs (never hides) a failure.</summary>
+        private void ReadGposInAd()
+        {
+            try
+            {
+                _gposInAd = _session.Directory?.GetAllGpos().Select(g => g.DisplayName).ToList();
+                var n = _gposInAd?.Count ?? 0;
+                Dispatcher.BeginInvoke(new Action(() => AddLog(LogLevel.Info, $"Read {n} existing GPO name(s) from AD.")));
+            }
+            catch (Exception ex)
+            {
+                _gposInAd = null;
+                Dispatcher.BeginInvoke(new Action(() => AddLog(LogLevel.Warning, "Could not list the GPOs in AD (GPOs that already exist will not be pre-skipped; Import still refuses them): " + ex.Message)));
+            }
         }
 
         private void ShowStoreSummary()

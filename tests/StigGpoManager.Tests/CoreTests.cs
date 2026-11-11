@@ -277,6 +277,20 @@ namespace StigGpoManager.Tests
         }
 
         [Fact]
+        public void SecondUpdateFromTheSamePackageSkipsGposAlreadyInAd()
+        {
+            var c = MappingResolver.Resolve(new[] { B("DoD WinSvr 2025 Member Server STIG Computer v1r4"), B("DoD WinSvr 2025 Domain Controller STIG Computer v1r4") }, Cfg());
+            var ms = c.Single(x => x.Backup.DisplayName.Contains("Member"));
+            Assert.False(ms.Skip);
+            var n = MappingResolver.SkipAlreadyInAd(c, new[] { "  " + ms.ProposedName.ToUpperInvariant().Replace(" ", "  ") + " ", "Default Domain Policy" });
+            Assert.Equal(1, n);
+            Assert.True(ms.Skip && ms.AlreadyInAd);
+            Assert.Contains("Already in AD", ms.Problem);
+            Assert.False(c.Single(x => x != ms).Skip);
+            Assert.Equal(0, MappingResolver.SkipAlreadyInAd(c, null));
+        }
+
+        [Fact]
         public void DuplicateBackupsArePickedTheSameWayEveryTime()
         {
             GpoBackupInfo Adobe(string folder, string time) => new GpoBackupInfo

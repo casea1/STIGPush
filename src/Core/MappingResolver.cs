@@ -17,6 +17,9 @@ namespace StigGpoManager.Core
         public bool Skip { get; set; }
         public string Problem { get; set; }
 
+        /// <summary>The proposed name already exists in AD (imported by an earlier update): skipped and locked.</summary>
+        public bool AlreadyInAd { get; set; }
+
         public bool IsMatched => Mapping != null;
         public string ProposedName => Mapping != null && Version != null ? Mapping.RenderName(Version) : null;
     }
@@ -106,6 +109,26 @@ namespace StigGpoManager.Core
         {
             try { return b.ReportPath != null && System.IO.File.Exists(b.ReportPath) ? PackageScanner.ComputeSha256(b.ReportPath) : null; }
             catch { return null; }
+        }
+
+        /// <summary>
+        /// Skips every selected candidate whose proposed name already exists in AD, so a second update from the same
+        /// package (after adding a mapping) imports only what is new. Names compare case- and whitespace-insensitively.
+        /// Returns how many were skipped.
+        /// </summary>
+        public static int SkipAlreadyInAd(IEnumerable<ImportCandidate> candidates, IEnumerable<string> existingGpoNames)
+        {
+            string Norm(string n) => System.Text.RegularExpressions.Regex.Replace((n ?? "").Trim(), @"\s+", " ");
+            var existing = new HashSet<string>((existingGpoNames ?? Enumerable.Empty<string>()).Select(Norm), StringComparer.OrdinalIgnoreCase);
+            int n = 0;
+            foreach (var c in candidates.Where(c => c.ProposedName != null && existing.Contains(Norm(c.ProposedName))))
+            {
+                if (!c.Skip) n++;
+                c.Skip = true;
+                c.AlreadyInAd = true;
+                c.Problem = $"Already in AD as '{c.ProposedName}' (imported earlier); skipped.";
+            }
+            return n;
         }
 
         /// <summary>DISA's "Local Policy - DoD ..." backups (and anything in a Local Policy / LGPO folder) are for standalone machines.</summary>
